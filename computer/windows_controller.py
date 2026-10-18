@@ -89,3 +89,70 @@ class WindowsController:
             return True, "Workstation locked, Sir."
         except Exception as e:
             return False, f"Failed to lock workstation: {e}"
+
+    def list_windows(self) -> list:
+        """Enumerates visible application windows with titles."""
+        import win32gui
+
+        windows = []
+
+        def enum_handler(hwnd, extra):
+            if win32gui.IsWindowVisible(hwnd):
+                title = win32gui.GetWindowText(hwnd).strip()
+                if title and title not in ["Program Manager", "Default IME", "MSCTFIME UI"]:
+                    windows.append({"hwnd": hwnd, "title": title})
+
+        try:
+            win32gui.EnumWindows(enum_handler, None)
+        except Exception:
+            pass
+        return windows
+
+    def focus_window(self, title_keyword: str) -> Tuple[bool, str]:
+        """
+        Finds a visible window matching keyword (e.g. 'antigravity', 'vscode', 'chrome')
+        and brings it to the foreground.
+        """
+        import win32gui
+        import win32con
+
+        kw = title_keyword.lower().strip()
+        matched_hwnd = None
+        matched_title = ""
+
+        for win in self.list_windows():
+            if kw in win["title"].lower():
+                matched_hwnd = win["hwnd"]
+                matched_title = win["title"]
+                break
+
+        if not matched_hwnd:
+            return False, f"No active window matching '{title_keyword}' found."
+
+        try:
+            # If minimized, restore it
+            if win32gui.IsIconic(matched_hwnd):
+                win32gui.ShowWindow(matched_hwnd, win32con.SW_RESTORE)
+            else:
+                win32gui.ShowWindow(matched_hwnd, win32con.SW_SHOW)
+
+            win32gui.SetForegroundWindow(matched_hwnd)
+            return True, f"Brought window '{matched_title}' to focus."
+        except Exception as e:
+            return False, f"Could not focus window '{matched_title}': {e}"
+
+    def close_window(self, title_keyword: str) -> Tuple[bool, str]:
+        """Closes a window matching title keyword cleanly."""
+        import win32gui
+        import win32con
+
+        kw = title_keyword.lower().strip()
+        for win in self.list_windows():
+            if kw in win["title"].lower():
+                try:
+                    win32gui.PostMessage(win["hwnd"], win32con.WM_CLOSE, 0, 0)
+                    return True, f"Sent close signal to '{win['title']}'."
+                except Exception as e:
+                    return False, f"Failed closing window: {e}"
+
+        return False, f"Window matching '{title_keyword}' not found."

@@ -21,15 +21,21 @@ class AppController:
         "edge": {"exe": "msedge.exe", "process": "msedge.exe", "cmd": "start msedge"},
         "microsoft edge": {"exe": "msedge.exe", "process": "msedge.exe", "cmd": "start msedge"},
         "browser": {"exe": "msedge.exe", "process": "msedge.exe", "cmd": "start msedge"},
+        "antigravity": {"exe": "Antigravity IDE.exe", "process": "Antigravity IDE.exe", "cmd": "start antigravity"},
+        "antigravity ide": {"exe": "Antigravity IDE.exe", "process": "Antigravity IDE.exe", "cmd": "start antigravity"},
         "vscode": {"exe": "code", "process": "Code.exe", "cmd": "code"},
         "vs code": {"exe": "code", "process": "Code.exe", "cmd": "code"},
+        "visual studio code": {"exe": "code", "process": "Code.exe", "cmd": "code"},
         "notepad": {"exe": "notepad.exe", "process": "notepad.exe", "cmd": "notepad.exe"},
         "explorer": {"exe": "explorer.exe", "process": "explorer.exe", "cmd": "explorer.exe"},
         "file explorer": {"exe": "explorer.exe", "process": "explorer.exe", "cmd": "explorer.exe"},
         "settings": {"exe": "ms-settings:", "process": "SystemSettings.exe", "cmd": "start ms-settings:"},
         "terminal": {"exe": "wt.exe", "process": "WindowsTerminal.exe", "cmd": "start wt"},
         "powershell": {"exe": "powershell.exe", "process": "powershell.exe", "cmd": "start powershell"},
+        "cmd": {"exe": "cmd.exe", "process": "cmd.exe", "cmd": "start cmd"},
         "spotify": {"exe": "spotify.exe", "process": "Spotify.exe", "cmd": "start spotify:"},
+        "word": {"exe": "winword.exe", "process": "WINWORD.EXE", "cmd": "start winword"},
+        "excel": {"exe": "excel.exe", "process": "EXCEL.EXE", "cmd": "start excel"},
     }
 
     def is_process_running(self, process_name: str) -> bool:
@@ -46,7 +52,7 @@ class AppController:
 
     def open_application(self, app_name: str) -> Tuple[bool, str]:
         """
-        Launches an application and verifies it was opened.
+        Launches an application or brings it into focus if already open.
 
         Returns:
             (success: bool, status_message: str)
@@ -55,14 +61,50 @@ class AppController:
         app_info = self.KNOWN_APPS.get(clean_name)
 
         if not app_info:
-            # Fallback search
             for k, v in self.KNOWN_APPS.items():
                 if k in clean_name or clean_name in k:
                     app_info = v
                     break
 
-        if not app_info:
-            return False, f"Application '{app_name}' is not recognized in registered apps catalog."
+        # If already running, bring window into focus
+        from computer.windows_controller import WindowsController
+        win_ctrl = WindowsController()
+
+        if app_info and self.is_process_running(app_info["process"]):
+            focused, focus_msg = win_ctrl.focus_window(clean_name)
+            if focused:
+                return True, f"{app_name.capitalize()} is already running and brought to focus, Sir."
+
+        # If known app, launch by registered command
+        if app_info:
+            try:
+                subprocess.Popen(
+                    app_info["cmd"],
+                    shell=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                time.sleep(0.8)
+                return True, f"{app_name.capitalize()} opened, Sir."
+            except Exception as e:
+                return False, f"Failed to launch {app_name}: {str(e)}"
+
+        # General-purpose Windows fallback: attempt to launch via start or focus
+        focused, _ = win_ctrl.focus_window(clean_name)
+        if focused:
+            return True, f"Located and brought {clean_name} to focus, Sir."
+
+        try:
+            subprocess.Popen(
+                f"start {clean_name}",
+                shell=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            time.sleep(0.8)
+            return True, f"Dispatched launch command for {app_name}, Sir."
+        except Exception as e:
+            return False, f"Could not open application '{app_name}': {e}"
 
         try:
             # Execute launch command

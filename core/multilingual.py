@@ -54,12 +54,12 @@ class MultilingualProcessor:
         return "en"
 
     def get_preferred_voice_for_language(self, language: str) -> str:
-        """Returns appropriate Microsoft Edge Neural voice."""
-        if language == "ta":
-            return "ta-IN-ValluvarNeural"
-        elif language == "hi":
-            return "hi-IN-MadhurNeural"
-        return "en-US-ChristopherNeural"
+        """
+        Returns the unified multilingual neural voice so JARVIS preserves
+        the EXACT same voice identity and speaker timbre across all languages
+        (English, Tamil, Tanglish, Hindi).
+        """
+        return "en-US-AndrewMultilingualNeural"
 
     def parse_code_mixed_intent(self, text: str) -> Optional[Tuple[str, Dict[str, Any]]]:
         """

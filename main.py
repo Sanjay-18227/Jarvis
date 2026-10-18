@@ -17,19 +17,19 @@ from core.agent import JarvisAgent
 
 def print_banner(agent: JarvisAgent):
     settings = agent.settings
-    print("\n" + "=" * 55)
+    print("=" * 55)
     print("      ██╗ █████╗ ██████╗ ██╗   ██╗██╗███████╗")
     print("      ██║██╔══██╗██╔══██╗██║   ██║██║██╔════╝")
     print("      ██║███████║██████╔╝██║   ██║██║███████╗")
     print(" ██   ██║██╔══██║██╔══██╗╚██╗ ██╔╝██║╚════██║")
     print(" ╚█████╔╝██║  ██║██║  ██║ ╚████╔╝ ██║███████║")
     print("  ╚════╝ ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚═╝╚══════╝")
-    print("    Windows Autonomous Voice AI — Phase 1 Online")
+    print("    Windows Autonomous Personal AI — Online")
     print("=" * 55)
     print(f" Owner:         {settings.owner_name} ({settings.preferred_title})")
-    print(f" LLM Provider:  {agent.provider.name}")
+    print(f" AI Brain:      {agent.provider.name}")
     print(f" STT Engine:    {settings.stt_engine} ({settings.stt_language})")
-    print(f" TTS Engine:    {settings.tts_engine} ({settings.tts_voice})")
+    print(f" Unified Voice: {settings.tts_voice}")
     print(f" Speaker Mode:  {agent.speaker_state.value}")
     print("=" * 55 + "\n")
 
@@ -40,10 +40,17 @@ def main():
     print_banner(agent)
 
     # Check CLI flags
+    if "--enroll" in sys.argv:
+        print("[JARVIS] Launching Voice Enrollment Protocol for Sanjay...")
+        from voice.voice_enrollment import VoiceEnrollment
+        enroller = VoiceEnrollment(recorder=agent.recorder)
+        enroller.enroll_owner(speaker_name=settings.owner_name)
+        sys.exit(0)
+
     if "--test" in sys.argv:
-        print("[JARVIS] Executing Phase 1 Verification Suite...\n")
+        print("[JARVIS] Executing Comprehensive Autonomous Verification Suite...\n")
         import pytest
-        exit_code = pytest.main(["-v", os.path.join(PROJECT_ROOT, "tests", "test_phase1.py")])
+        exit_code = pytest.main(["-v", os.path.join(PROJECT_ROOT, "tests")])
         sys.exit(exit_code)
 
     if "--text" in sys.argv or "-t" in sys.argv:

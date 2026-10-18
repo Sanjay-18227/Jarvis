@@ -97,8 +97,15 @@ class TextToSpeech:
         self._stop_event.clear()
         target_voice = voice or self.voice
 
-        # Attempt Edge TTS first if selected
-        if self.settings.tts_engine == "edge_tts":
+        # Attempt ElevenLabs if configured and selected
+        if self.settings.tts_engine == "elevenlabs" and self.settings.elevenlabs_api_key:
+            success = self._speak_elevenlabs(clean_text)
+            if success:
+                return True
+            print("[TTS] ElevenLabs synthesis failed. Falling back to Edge TTS.")
+
+        # Attempt Edge TTS
+        if self.settings.tts_engine in ["edge_tts", "elevenlabs"]:
             success = self._speak_edge_tts(clean_text, target_voice)
             if success:
                 return True
@@ -106,6 +113,40 @@ class TextToSpeech:
 
         # Fallback to local SAPI5 (pyttsx3)
         return self._speak_pyttsx3(clean_text)
+
+    def _speak_elevenlabs(self, text: str) -> bool:
+        """Synthesize using ElevenLabs multilingual v2 model for hyper-realistic voice."""
+        try:
+            from elevenlabs.client import ElevenLabs
+            import miniaudio
+            import sounddevice as sd
+
+            client = ElevenLabs(api_key=self.settings.elevenlabs_api_key)
+            audio_generator = client.text_to_speech.convert(
+                text=text,
+                voice_id="JBFqnCBsd6RMkjVDRZzb",  # George - consistent, deep, warm multilingual identity
+                model_id="eleven_multilingual_v2",
+                output_format="mp3_44100_128",
+            )
+            audio_bytes = b"".join(audio_generator)
+            if not audio_bytes or self._stop_event.is_set():
+                return False
+
+            decoded = miniaudio.decode(audio_bytes, nchannels=1, sample_rate=44100)
+            self._is_speaking = True
+            sd.play(decoded.samples, samplerate=decoded.sample_rate)
+            while sd.get_stream().active:
+                if self._stop_event.is_set():
+                    sd.stop()
+                    break
+                sd.sleep(50)
+
+            self._is_speaking = False
+            return True
+        except Exception as e:
+            print(f"[TTS] ElevenLabs playback notice: {e}")
+            self._is_speaking = False
+            return False
 
     def _speak_edge_tts(self, text: str, voice: str) -> bool:
         """Synthesize using Edge TTS and play via miniaudio + sounddevice."""

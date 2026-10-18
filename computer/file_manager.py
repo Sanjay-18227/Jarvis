@@ -47,6 +47,18 @@ class FileManager:
         except Exception as e:
             return False, f"Error creating file: {e}"
 
+    def read_file(self, file_path: str, max_chars: int = 4000) -> Tuple[bool, str]:
+        """Reads contents of a file safely."""
+        target = self._resolve_path(file_path)
+        try:
+            if not os.path.isfile(target):
+                return False, f"File not found: {target}"
+            with open(target, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read(max_chars)
+            return True, content
+        except Exception as e:
+            return False, f"Error reading file {target}: {e}"
+
     def rename_file(self, old_path: str, new_path: str) -> Tuple[bool, str]:
         """Renames a file or folder and verifies new name."""
         src = self._resolve_path(old_path)

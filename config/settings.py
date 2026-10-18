@@ -51,7 +51,7 @@ class Settings:
     groq_stt_model: str = "whisper-large-v3-turbo"
 
     gemini_api_key: Optional[str] = None
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.8-flash"
     openai_api_key: Optional[str] = None
     elevenlabs_api_key: Optional[str] = None
 
@@ -64,8 +64,8 @@ class Settings:
     dynamic_energy_threshold: bool = True
 
     # Voice Output (TTS)
-    tts_engine: str = "edge_tts"  # edge_tts | pyttsx3 | elevenlabs
-    tts_voice: str = "en-US-ChristopherNeural"
+    tts_engine: str = "edge_tts"  # edge_tts | elevenlabs | pyttsx3
+    tts_voice: str = "en-US-AndrewMultilingualNeural"  # Single consistent multilingual voice
     tts_rate: str = "+0%"
     tts_volume: str = "+0%"
     tts_pitch: str = "+0Hz"
@@ -104,7 +104,7 @@ class Settings:
             groq_model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
             groq_stt_model=os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo"),
             gemini_api_key=os.getenv("GEMINI_API_KEY"),
-            gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+            gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
             openai_api_key=os.getenv("OPENAI_API_KEY"),
             elevenlabs_api_key=os.getenv("ELEVENLABS_API_KEY"),
             stt_engine=os.getenv("STT_ENGINE", "groq_whisper").lower(),
@@ -114,7 +114,7 @@ class Settings:
             energy_threshold=int(os.getenv("ENERGY_THRESHOLD", "350")),
             dynamic_energy_threshold=os.getenv("DYNAMIC_ENERGY_THRESHOLD", "true").lower() == "true",
             tts_engine=os.getenv("TTS_ENGINE", "edge_tts").lower(),
-            tts_voice=os.getenv("TTS_VOICE", "en-US-ChristopherNeural"),
+            tts_voice=os.getenv("TTS_VOICE", "en-US-AndrewMultilingualNeural"),
             tts_rate=os.getenv("TTS_RATE", "+0%"),
             tts_volume=os.getenv("TTS_VOLUME", "+0%"),
             tts_pitch=os.getenv("TTS_PITCH", "+0Hz"),

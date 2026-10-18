@@ -92,31 +92,31 @@ OWNER_NAME=Sanjay
 ASSISTANT_NAME=JARVIS
 PREFERRED_TITLE=Sir
 
-# AI Provider: Google Gemini
+# AI Brain: Google Gemini 3.8 Flash
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=your_gemini_api_key_here
 GEMINI_MODEL=gemini-3.8-flash
 
-# Speech Engines
+# Speech Engines (Single Consistent Multilingual Voice)
 STT_ENGINE=google
 TTS_ENGINE=edge_tts
-TTS_VOICE=en-US-ChristopherNeural
+TTS_VOICE=en-US-AndrewMultilingualNeural
 ```
 
 ### 2. Enroll Your Voice Signature (Owner Calibration)
-Run the interactive calibration utility to register your voice embedding:
+Register your unique acoustic MFCC voice embedding (already completed for Sanjay in `memory/owner_voice_profile.json`):
 ```powershell
-python -c "from voice.voice_enrollment import VoiceEnrollment; VoiceEnrollment().run_interactive_enrollment('Sanjay')"
+python main.py --enroll
 ```
 
-### 3. Run Verification Test Suite
-Run all 23 unit and security integration tests:
+### 3. Run Autonomous Verification Test Suite
+Verify all 33 unit, security, and autonomous computer-use tests:
 ```powershell
-pytest tests/ -v
+python main.py --test
 ```
 
 ### 4. Interactive Development Modes
-- **Continuous Voice Mode**:
+- **Continuous Voice Mode** (Hands-Free Wake Word "Hey Jarvis"):
   ```powershell
   python main.py
   ```
@@ -126,6 +126,7 @@ pytest tests/ -v
   ```
 
 ### 5. Windows Background Production Operation
-- **Start in Background** (No CMD window): Double-click [`scripts/start_jarvis.bat`](file:///c:/Users/acer/Desktop/Jarvis/scripts/start_jarvis.bat).
+- **Start in Background** (Silent execution via `pythonw.exe`): Double-click [`scripts/start_jarvis.bat`](file:///c:/Users/acer/Desktop/Jarvis/scripts/start_jarvis.bat).
 - **Stop Background Process**: Double-click [`scripts/stop_jarvis.bat`](file:///c:/Users/acer/Desktop/Jarvis/scripts/stop_jarvis.bat).
-- **Auto-Start on Windows Boot**: Right-click [`scripts/register_startup.bat`](file:///c:/Users/acer/Desktop/Jarvis/scripts/register_startup.bat) and run.
+- **Emergency Stop Phrase**: Say **"Jarvis stop"** at any time to instantly freeze automation.
+- **Auto-Start on Windows Boot**: Right-click [`scripts/register_startup.bat`](file:///c:/Users/acer/Desktop/Jarvis/scripts/register_startup.bat) and run as Administrator.
