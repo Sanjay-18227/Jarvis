@@ -9,13 +9,17 @@ from typing import Optional
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
-# Prioritize IPv4 resolution to prevent Windows IPv6 DNS timeout latency
+# Safe IPv4 prioritization with graceful fallback
 _orig_getaddrinfo = socket.getaddrinfo
 
 
 def _getaddrinfo_ipv4(*args, **kwargs):
-    responses = _orig_getaddrinfo(*args, **kwargs)
-    return [r for r in responses if r[0] == socket.AF_INET] or responses
+    try:
+        responses = _orig_getaddrinfo(*args, **kwargs)
+        ipv4 = [r for r in responses if r[0] == socket.AF_INET]
+        return ipv4 if ipv4 else responses
+    except Exception:
+        return _orig_getaddrinfo(*args, **kwargs)
 
 
 socket.getaddrinfo = _getaddrinfo_ipv4
@@ -47,6 +51,7 @@ class Settings:
     groq_stt_model: str = "whisper-large-v3-turbo"
 
     gemini_api_key: Optional[str] = None
+    gemini_model: str = "gemini-2.5-flash"
     openai_api_key: Optional[str] = None
     elevenlabs_api_key: Optional[str] = None
 
@@ -99,6 +104,7 @@ class Settings:
             groq_model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
             groq_stt_model=os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo"),
             gemini_api_key=os.getenv("GEMINI_API_KEY"),
+            gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
             openai_api_key=os.getenv("OPENAI_API_KEY"),
             elevenlabs_api_key=os.getenv("ELEVENLABS_API_KEY"),
             stt_engine=os.getenv("STT_ENGINE", "groq_whisper").lower(),

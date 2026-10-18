@@ -29,7 +29,7 @@ def get_llm_provider(settings: Optional[Settings] = None, force_mock: bool = Fal
         print("[LLM Factory] Groq API key not set or unavailable. Checking fallbacks...")
 
     elif provider_type == "gemini":
-        provider = GeminiProvider(api_key=cfg.gemini_api_key)
+        provider = GeminiProvider(api_key=cfg.gemini_api_key, model=cfg.gemini_model)
         if provider.is_available():
             return provider
         print("[LLM Factory] Gemini API key not set or unavailable. Checking fallbacks...")
@@ -42,7 +42,7 @@ def get_llm_provider(settings: Optional[Settings] = None, force_mock: bool = Fal
 
     # Secondary check: if Gemini is available as fallback
     if cfg.gemini_api_key:
-        p = GeminiProvider(api_key=cfg.gemini_api_key)
+        p = GeminiProvider(api_key=cfg.gemini_api_key, model=cfg.gemini_model)
         if p.is_available():
             return p
 
