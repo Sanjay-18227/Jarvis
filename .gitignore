@@ -1,0 +1,35 @@
+# Environment variables & secrets
+.env
+*.env
+secrets.json
+
+# Python cache & artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Audio & media temporary files
+*.wav
+*.mp3
+*.ogg
+*.raw
+!tests/fixtures/*.wav
+
+# Logs
+*.log
+logs/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
