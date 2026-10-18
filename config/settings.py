@@ -68,7 +68,7 @@ class Settings:
     tts_voice: str = "en-US-ChristopherNeural"
     tts_rate: str = "+0%"
     tts_volume: str = "+0%"
-    tts_pitch: str = "+0%"
+    tts_pitch: str = "+0Hz"
 
     # Wake Word
     wake_word: str = "hey jarvis"
@@ -117,7 +117,7 @@ class Settings:
             tts_voice=os.getenv("TTS_VOICE", "en-US-ChristopherNeural"),
             tts_rate=os.getenv("TTS_RATE", "+0%"),
             tts_volume=os.getenv("TTS_VOLUME", "+0%"),
-            tts_pitch=os.getenv("TTS_PITCH", "+0%"),
+            tts_pitch=os.getenv("TTS_PITCH", "+0Hz"),
             wake_word=os.getenv("WAKE_WORD", "hey jarvis").lower(),
             wake_word_engine=os.getenv("WAKE_WORD_ENGINE", "openwakeword").lower(),
             default_permission_level=os.getenv("DEFAULT_PERMISSION_LEVEL", "OWNER").upper(),

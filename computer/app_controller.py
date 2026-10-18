@@ -17,6 +17,10 @@ class AppController:
     KNOWN_APPS = {
         "calculator": {"exe": "calc.exe", "process": "CalculatorApp.exe", "cmd": "start calc:"},
         "chrome": {"exe": "chrome.exe", "process": "chrome.exe", "cmd": "start chrome"},
+        "msedge": {"exe": "msedge.exe", "process": "msedge.exe", "cmd": "start msedge"},
+        "edge": {"exe": "msedge.exe", "process": "msedge.exe", "cmd": "start msedge"},
+        "microsoft edge": {"exe": "msedge.exe", "process": "msedge.exe", "cmd": "start msedge"},
+        "browser": {"exe": "msedge.exe", "process": "msedge.exe", "cmd": "start msedge"},
         "vscode": {"exe": "code", "process": "Code.exe", "cmd": "code"},
         "vs code": {"exe": "code", "process": "Code.exe", "cmd": "code"},
         "notepad": {"exe": "notepad.exe", "process": "notepad.exe", "cmd": "notepad.exe"},

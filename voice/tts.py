@@ -115,12 +115,13 @@ class TextToSpeech:
             import sounddevice as sd
 
             async def _synthesize():
+                clean_pitch = self.pitch if "Hz" in self.pitch else "+0Hz"
                 communicate = edge_tts.Communicate(
                     text,
                     voice=voice,
                     rate=self.rate,
                     volume=self.volume,
-                    pitch=self.pitch,
+                    pitch=clean_pitch,
                 )
                 audio_buffer = bytearray()
                 async for chunk in communicate.stream():

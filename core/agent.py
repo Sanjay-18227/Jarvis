@@ -220,6 +220,11 @@ class JarvisAgent:
     def _parse_english_command(self, text: str) -> Optional[Tuple[str, Dict[str, Any]]]:
         """Maps standard English voice commands to computer actions."""
         t = text.lower().strip()
+        # Strip conversational fillers and wake words
+        for prefix in ["hey jarvis ", "jarvis ", "ok jarvis ", "okay jarvis ", "ok ", "okay ", "please ", "can you ", "could you "]:
+            if t.startswith(prefix):
+                t = t[len(prefix):].strip()
+
         if t.startswith("open "):
             target = t[5:].replace("application", "").replace("app", "").strip()
             return "open_application", {"target": target}
