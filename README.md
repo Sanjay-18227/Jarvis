@@ -1,105 +1,131 @@
 # JARVIS — Personal Windows Autonomous Voice AI
 
-JARVIS is a secure, voice-first autonomous personal AI assistant engineered for **Sanjay** on Windows 10/11. Built with modularity, defense-in-depth security, and real-time speech processing, JARVIS can hear, speak, and intelligently manage tasks while protecting sensitive personal data.
+**JARVIS** is a production-grade, voice-first autonomous desktop AI assistant built specifically for **Sanjay** on Windows 10/11. JARVIS operates via natural speech-to-speech interaction, recognizes your enrolled voice signature, perceives on-screen context, safely controls Windows applications and files, acts as an autonomous coding assistant in VS Code, and enforces defense-in-depth security with mandatory spoken confirmation for sensitive actions.
 
 ---
 
-## Architecture Overview
+## 🏗 System Architecture
 
 ```
 jarvis/
-├── main.py                     # Primary entry point (Voice, Text, Test modes)
+├── main.py                         # Unified entry point (Voice, Text, Test, Enroll)
 ├── config/
-│   ├── settings.py             # System settings, IPv4 prioritization, UTF-8 console
-│   └── constants.py            # Risk levels, speaker classifications, prompts
+│   ├── settings.py                 # System configuration, IPv4 prioritization, UTF-8 console
+│   └── constants.py                # Risk levels (0-4), speaker classifications, system personas
+│
 ├── core/
-│   └── agent.py                # JarvisAgent orchestrator
-├── llm/
-│   ├── base.py                 # Abstract AIProvider interface
-│   ├── groq_provider.py        # Groq ultra-fast LPU inference (Llama 3.3 / 3.1)
-│   ├── gemini_provider.py      # Google Gemini API integration
-│   ├── mock_provider.py        # Offline simulated provider for tests/offline usage
-│   └── provider_factory.py     # Resilient provider selection with failovers
+│   ├── agent.py                    # Central JarvisAgent orchestrator
+│   ├── executor.py                 # Trusted ActionExecutor gatekeeper
+│   ├── permissions.py              # Permission matrix (OWNER, UNKNOWN, UNCERTAIN)
+│   ├── risk_engine.py              # Risk classification engine (Levels 0 to 4)
+│   ├── coding_agent.py             # VS Code coding agent (Plan-Act-Observe-Verify-Fix)
+│   └── multilingual.py             # Code-mixed Tanglish/Tamil/Hindi intent parser
+│
 ├── voice/
-│   ├── recorder.py             # Audio recorder with acoustic RMS energy VAD
-│   ├── stt.py                  # Groq Whisper API + Google Speech Recognition fallback
-│   └── tts.py                  # Microsoft Edge Neural TTS with text sanitizer & barge-in
-├── memory/
-│   ├── conversation_memory.py  # Sliding window conversational context
-│   └── preferences.py          # Persistent owner preferences (JSON)
+│   ├── wake_word.py                # Local low-power wake-word detector ("Hey Jarvis")
+│   ├── recorder.py                 # Audio recorder with acoustic RMS energy VAD
+│   ├── stt.py                      # Multi-engine speech-to-text (Google STT / Groq Whisper)
+│   ├── tts.py                      # Microsoft Edge Neural TTS with text sanitizer & barge-in
+│   ├── speaker_verification.py     # MFCC feature extraction & Cosine similarity scoring
+│   └── voice_enrollment.py         # Multi-sample voice signature enrollment workflow
+│
+├── computer/
+│   ├── app_controller.py           # Native launcher for Chrome, Calc, VS Code, Spotify, Settings
+│   ├── file_manager.py             # Verified directory and file operations with sandboxing
+│   ├── windows_controller.py       # Master volume, media playback, battery, lock screen, Google search
+│   ├── vscode_controller.py        # VS Code workspace and file opener
+│   └── ui_automation.py            # Win32 mouse clicks, wheel scrolling, typing, and hotkeys
+│
+├── vision/
+│   ├── screen_capture.py           # Display capture and active window detection
+│   └── screen_understanding.py     # Multimodal Gemini 3.8 Flash UI & error inspection
+│
 ├── security/
-│   ├── privacy_guard.py        # Redacts API keys, passwords, and enforces access control
-│   └── audit_log.py            # Audit logger recording tasks and risk levels without secrets
+│   ├── privacy_guard.py            # Secret redaction and credential protection
+│   ├── confirmation.py             # Ephemeral single-use confirmation manager
+│   └── audit_log.py                # Redacted JSONL action audit trail
+│
+├── memory/
+│   ├── conversation_memory.py      # Bounded sliding window dialogue context
+│   └── preferences.py              # Persistent user preferences (JSON)
+│
+├── scripts/
+│   ├── start_jarvis.bat            # Launches JARVIS silently in background via pythonw.exe
+│   ├── stop_jarvis.bat             # Gracefully terminates running background instance
+│   ├── register_startup.bat        # Registers JARVIS to run automatically at Windows logon
+│   └── unregister_startup.bat      # Removes JARVIS from Windows Startup
+│
 ├── tests/
-│   └── test_phase1.py          # Comprehensive Phase 1 verification test suite
-├── .env.example                # Configuration template
-├── requirements.txt            # Dependency specification
-└── README.md
+│   ├── test_phase1.py              # Phase 1 unit test suite
+│   └── test_full_suite.py          # Comprehensive 14-point security and behavior test suite
+│
+├── .env.example                    # Environment variable template
+├── requirements.txt                # Python package dependencies
+└── README.md                       # Complete documentation
 ```
 
 ---
 
-## Key Features Implemented (Phase 1)
+## 🚀 All 10 Phases Implemented
 
-1. **Provider Independence (`AIProvider`)**:
-   - Primary: **Groq API** (`llama-3.3-70b-versatile` / `llama-3.1-8b-instant`) for ultra-low latency inference.
-   - Built-in graceful fallbacks to **Google Gemini** or **Offline Mock mode**.
-2. **Audio Recorder & Voice Activity Detection (VAD)**:
-   - Dynamic acoustic noise calibration and RMS energy thresholding.
-   - Silence cutoff detection (stops recording when you finish speaking).
-   - Barge-in / interruption capability.
-3. **Speech-to-Text (STT)**:
-   - Whisper transcription via Groq API (`whisper-large-v3-turbo`).
-   - Automatic fallback to Google Speech Recognition with multilingual support (English, Tamil, Hindi).
-4. **Natural Neural Speech (TTS)**:
-   - Microsoft Edge Neural voices (`en-US-ChristopherNeural`, `ta-IN-ValluvarNeural`, `hi-IN-MadhurNeural`).
-   - In-memory decoding and playback via `miniaudio` and `sounddevice` with instant interruption support.
-   - Text sanitizer strips markdown, URLs, and code blocks before speaking.
-   - Offline fallback to Windows SAPI5 (`pyttsx3`).
-5. **Privacy Guard & Defense-in-Depth**:
-   - Detects and redacts credentials (API keys, passwords, tokens, credit cards).
-   - Unknown speakers cannot access private documents or credentials.
-   - Unauthenticated sensitive commands are blocked.
-6. **Audit Logger**:
-   - Thread-safe JSONL audit trail recording every task, speaker class, risk level, and execution status.
-   - Guaranteed secret redaction in all logs.
+| Phase | Subsystem | Status | Features |
+|---|---|---|---|
+| **Phase 1** | **Core Architecture & Speech** | ✅ Complete | Modular architecture, Google Gemini 3.8 Flash integration, Edge Neural TTS, VAD audio recording, memory, and privacy redaction. |
+| **Phase 2** | **Wake Word Engine** | ✅ Complete | Local keyword detector for "Hey Jarvis" and "Jarvis" with enable/disable controls. |
+| **Phase 3** | **Owner Voice Recognition** | ✅ Complete | Multi-sample voice enrollment, MFCC cepstral feature extraction, and Cosine similarity scoring into `OWNER`, `UNKNOWN`, and `UNCERTAIN`. |
+| **Phase 4** | **Risk & Permissions** | ✅ Complete | Tiered risk classification (Level 0-4), mandatory spoken confirmation for destructive actions, and strict guest access blocking. |
+| **Phase 5** | **Computer Control** | ✅ Complete | Verified app launching/closing (Calculator, Chrome, VS Code, Notepad, Spotify, Settings), file management, volume, media keys, screen locking. |
+| **Phase 6** | **Screen Understanding** | ✅ Complete | Active window context inspection, sensitive window shielding, and multimodal Gemini 3.8 Flash vision analysis for screen errors and UI. |
+| **Phase 7** | **VS Code Coding Agent** | ✅ Complete | Autonomous `PLAN -> ACT -> OBSERVE -> VERIFY -> FIX -> VERIFY -> REPORT` development loop with automated test execution. |
+| **Phase 8** | **Multilingual Voice** | ✅ Complete | Code-mixed Tanglish/Tamil/Hindi intent extraction (e.g. *"Jarvis chrome open பண்ணு"* or *"paatu podu"*) and dynamic neural voice switching (`ta-IN-ValluvarNeural`, `hi-IN-MadhurNeural`). |
+| **Phase 9** | **Background Startup** | ✅ Complete | Windows Startup integration, background execution via `pythonw.exe`, and one-click start/stop/restart batch scripts. |
+| **Phase 10** | **Testing & Hardening** | ✅ Complete | 23 automated tests verifying least privilege, credential redaction, emergency stop, and confirmation enforcement. |
 
 ---
 
-## Quick Start
+## ⚡ Quick Start Guide
 
-### 1. Configuration
-
-Copy `.env.example` to `.env` and insert your **Groq API Key**:
-```bash
-cp .env.example .env
-```
-Edit `.env`:
+### 1. Configure Credentials
+Edit your [`.env`](file:///c:/Users/acer/Desktop/Jarvis/.env) file:
 ```env
 OWNER_NAME=Sanjay
+ASSISTANT_NAME=JARVIS
 PREFERRED_TITLE=Sir
-LLM_PROVIDER=groq
-GROQ_API_KEY=gsk_your_groq_api_key_here
-GROQ_MODEL=llama-3.3-70b-versatile
+
+# AI Provider: Google Gemini
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_MODEL=gemini-3.8-flash
+
+# Speech Engines
+STT_ENGINE=google
+TTS_ENGINE=edge_tts
+TTS_VOICE=en-US-ChristopherNeural
 ```
 
-*(If `GROQ_API_KEY` is not provided, JARVIS automatically boots in offline mock mode so you can test all features safely).*
-
-### 2. Run Verification Tests
+### 2. Enroll Your Voice Signature (Owner Calibration)
+Run the interactive calibration utility to register your voice embedding:
 ```powershell
-python main.py --test
-```
-or
-```powershell
-pytest tests/test_phase1.py -v
+python -c "from voice.voice_enrollment import VoiceEnrollment; VoiceEnrollment().run_interactive_enrollment('Sanjay')"
 ```
 
-### 3. Interactive Text Mode (Development / Headless)
+### 3. Run Verification Test Suite
+Run all 23 unit and security integration tests:
 ```powershell
-python main.py --text
+pytest tests/ -v
 ```
 
-### 4. Continuous Voice Mode (Microphone to Speaker)
-```powershell
-python main.py
-```
+### 4. Interactive Development Modes
+- **Continuous Voice Mode**:
+  ```powershell
+  python main.py
+  ```
+- **Interactive Text Mode**:
+  ```powershell
+  python main.py --text
+  ```
+
+### 5. Windows Background Production Operation
+- **Start in Background** (No CMD window): Double-click [`scripts/start_jarvis.bat`](file:///c:/Users/acer/Desktop/Jarvis/scripts/start_jarvis.bat).
+- **Stop Background Process**: Double-click [`scripts/stop_jarvis.bat`](file:///c:/Users/acer/Desktop/Jarvis/scripts/stop_jarvis.bat).
+- **Auto-Start on Windows Boot**: Right-click [`scripts/register_startup.bat`](file:///c:/Users/acer/Desktop/Jarvis/scripts/register_startup.bat) and run.
