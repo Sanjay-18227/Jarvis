@@ -8,6 +8,7 @@ Central Autonomous Desktop Orchestrator integrating:
 - Trusted Action Executor with least-privilege security & confirmation gates
 - Vision & Screen understanding loop
 - Unified single consistent multilingual neural voice
+-Very Intelligent System and extremely advanced AI
 """
 
 import sys
@@ -41,6 +42,7 @@ from security.privacy_guard import PrivacyGuard
 from security.secrets_manager import SecretsManager
 from security.audit_log import AuditLogger
 from security.confirmation import ConfirmationManager
+from core.fast_router import FastRouter
 
 
 class JarvisAgent:
@@ -108,6 +110,17 @@ class JarvisAgent:
             task_manager=self.task_manager,
             screen_vision=self.screen_vision,
             tool_catalog=self.tool_catalog,
+        )
+
+        # Wire research agent to Gemini client if available
+        if hasattr(self.executor, "research_agent") and self.gemini_client:
+            self.executor.research_agent.gemini = self.gemini_client
+
+        # Hybrid Fast Router (Sub-second local OS actions & conversational greetings)
+        self.fast_router = FastRouter(
+            app_indexer=self.executor.app_ctrl.indexer,
+            win_ctrl=self.executor.win_ctrl,
+            sys_monitor=self.executor.sys_monitor,
         )
 
         self._running = False
@@ -201,6 +214,22 @@ class JarvisAgent:
                 status=ActionStatus.DENIED,
             )
             return refusal_message
+
+        # Step 2.5: Fast Path Hybrid Intelligence (Sub-second local OS actions & conversational greetings)
+        fast_result = self.fast_router.try_fast_path(clean_input, active_speaker)
+        if fast_result is not None:
+            action_name, fast_resp = fast_result
+            self.memory.add_user_message(clean_input)
+            self.memory.add_assistant_message(fast_resp)
+            self.audit_logger.log_action(
+                task=clean_input,
+                speaker=active_speaker,
+                action=f"FAST_PATH_{action_name.upper()}",
+                risk_level=RiskLevel.LEVEL_0_INFORMATIONAL,
+                status=ActionStatus.SUCCESS,
+                details={"response": fast_resp[:400]},
+            )
+            return fast_resp
 
         # Step 3: Screen Vision Direct Check
         if any(term in clean_input.lower() for term in ["what is this error", "look at my screen", "look at screen", "what's wrong here", "what is on my screen"]):

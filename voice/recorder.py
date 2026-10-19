@@ -83,6 +83,7 @@ class AudioRecorder:
         Returns:
             WAV-encoded bytes or None if timed out without speech.
         """
+        from collections import deque
         import sounddevice as sd
 
         self._interrupted = False
@@ -90,13 +91,25 @@ class AudioRecorder:
 
         frames = []
         speech_started = False
-        silence_start_time = None
         start_time = time.time()
         phrase_start_time = None
+        end_time = None
+
+        # Pre-speech rolling buffer: retains ~250ms of audio before speech threshold
+        pre_buffer_chunks = 4
+        pre_buffer = deque(maxlen=pre_buffer_chunks)
 
         chunk_duration = self.chunk_size / self.sample_rate
-        silence_chunks_needed = int(silence_duration / chunk_duration)
+        # Fast silence detection (0.55s default for conversational snappiness)
+        silence_chunks_needed = max(int(silence_duration / chunk_duration), 5)
         silence_counter = 0
+
+        self.last_latency_stats = {
+            "vad_wait_seconds": 0.0,
+            "speech_duration_seconds": 0.0,
+            "silence_tail_seconds": 0.0,
+            "total_record_seconds": 0.0,
+        }
 
         try:
             with sd.InputStream(
@@ -112,11 +125,14 @@ class AudioRecorder:
                     rms = self.calculate_rms(chunk)
 
                     if not speech_started:
+                        pre_buffer.append(chunk)
                         # Waiting for speech to begin
                         if rms > self.energy_threshold:
                             speech_started = True
                             phrase_start_time = now
-                            frames.append(chunk)
+                            self.last_latency_stats["vad_wait_seconds"] = round(now - start_time, 3)
+                            # Prepend pre-speech buffer so leading consonants are never clipped
+                            frames.extend(list(pre_buffer))
                             silence_counter = 0
                         elif now - start_time > timeout:
                             # Timed out waiting for speech
@@ -128,13 +144,14 @@ class AudioRecorder:
                         if rms < self.energy_threshold:
                             silence_counter += 1
                             if silence_counter >= silence_chunks_needed:
-                                # Silence threshold reached, end phrase
+                                end_time = now
                                 break
                         else:
                             silence_counter = 0
 
                         # Check maximum phrase limit
                         if phrase_start_time and (now - phrase_start_time > phrase_time_limit):
+                            end_time = now
                             break
 
         except Exception as e:
@@ -142,6 +159,12 @@ class AudioRecorder:
             return None
         finally:
             self.is_recording = False
+
+
+        total_now = time.time()
+        if phrase_start_time:
+            self.last_latency_stats["speech_duration_seconds"] = round((end_time or total_now) - phrase_start_time, 3)
+        self.last_latency_stats["total_record_seconds"] = round(total_now - start_time, 3)
 
         if not frames or not speech_started:
             return None

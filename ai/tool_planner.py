@@ -336,6 +336,78 @@ class ToolCatalog:
             requires_confirmation=False,
         ))
 
+        # 17. Laptop Performance Diagnosis (Section 30)
+        self.register_tool(ToolDefinition(
+            name="diagnose_laptop_performance",
+            description="Inspects real CPU, RAM, disk, battery, and top memory-consuming processes to diagnose why the laptop is slow or lagging.",
+            parameters={
+                "type": "object",
+                "properties": {},
+            },
+            permission_level="OWNER",
+            risk_level=0,
+            requires_confirmation=False,
+        ))
+
+        # 18. AI Web Research (Section 14 & 15)
+        self.register_tool(ToolDefinition(
+            name="research_web_topic",
+            description="Searches live web sources, cross-checks findings, deduplicates info, and synthesizes an intelligent factual summary on any topic or current news.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "description": "Research query or topic to investigate."
+                    }
+                },
+                "required": ["topic"]
+            },
+            permission_level="OWNER",
+            risk_level=1,
+            requires_confirmation=False,
+        ))
+
+        # 19. Autonomous Project Execution (Section 21 & 22)
+        self.register_tool(ToolDefinition(
+            name="run_project",
+            description="Automatically detects the project framework (FastAPI, Flask, Streamlit, Django, React, Next.js, Vite, Python), determines the correct run command and virtual environment, and executes/verifies the run.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "project_dir": {
+                        "type": "string",
+                        "description": "Optional path to the project directory. Defaults to current workspace."
+                    }
+                }
+            },
+            permission_level="OWNER",
+            risk_level=2,
+            requires_confirmation=False,
+        ))
+
+        # 20. Coding Investigation & Bug Fix (Section 23 & 25)
+        self.register_tool(ToolDefinition(
+            name="investigate_project",
+            description="Investigates a broken project: inspects code files, terminal errors, missing packages, applies safe fixes, reruns, and verifies execution.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "project_dir": {
+                        "type": "string",
+                        "description": "Optional project path to investigate."
+                    },
+                    "issue_hint": {
+                        "type": "string",
+                        "description": "Optional description of what is failing."
+                    }
+                }
+            },
+            permission_level="OWNER",
+            risk_level=2,
+            requires_confirmation=False,
+        ))
+
     def to_gemini_declarations(self) -> List[Dict[str, Any]]:
         """Converts tool catalog into declarations format for Gemini API."""
         declarations = []

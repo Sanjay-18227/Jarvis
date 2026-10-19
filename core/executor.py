@@ -19,6 +19,9 @@ from computer.mouse_controller import MouseController
 from computer.keyboard_controller import KeyboardController
 from computer.browser_controller import BrowserController
 from computer.terminal_controller import TerminalController
+from computer.system_monitor import SystemMonitor
+from ai.research_agent import ResearchAgent
+from core.project_detector import ProjectDetector
 
 
 class ActionExecutor:
@@ -48,6 +51,11 @@ class ActionExecutor:
         self.keyboard_ctrl = KeyboardController()
         self.browser_ctrl = BrowserController(keyboard=self.keyboard_ctrl)
         self.terminal_ctrl = TerminalController()
+
+        # Performance, Research, & Project Automation Subsystems
+        self.sys_monitor = SystemMonitor()
+        self.research_agent = ResearchAgent()
+        self.project_detector = ProjectDetector()
 
     def execute_action(
         self,
@@ -245,6 +253,34 @@ class ActionExecutor:
                 status = self.win_ctrl.get_battery_status()
                 success = True
                 msg = f"Battery is at {status.get('percent', 100)}% ({status.get('status', 'OK')})."
+
+            # 9. Laptop Performance Diagnosis (Section 30)
+            elif act_clean in ["diagnose_laptop_performance", "diagnose_performance"]:
+                success, msg = self.sys_monitor.diagnose_performance()
+
+            # 10. AI Web Research (Section 14 & 15)
+            elif act_clean in ["research_web_topic", "research_topic"]:
+                topic = params.get("topic", "")
+                success, msg = self.research_agent.research_topic(topic)
+
+            # 11. Project Run & Detection (Section 21 & 22)
+            elif act_clean == "run_project":
+                pdir = params.get("project_dir")
+                profile = self.project_detector.detect_project(pdir)
+                run_cmd = profile.get("run_cmd")
+                if not run_cmd:
+                    success, msg = False, "Could not determine launch command for project."
+                else:
+                    success, ret_code, out = self.terminal_ctrl.run_command(run_cmd, cwd=profile.get("root"), timeout=15)
+                    msg = f"Executed {profile.get('framework', 'project')} command '{run_cmd}': {out[:200]}"
+
+            # 12. Coding Project Investigation (Section 23 & 25)
+            elif act_clean == "investigate_project":
+                pdir = params.get("project_dir") or os.getcwd()
+                profile = self.project_detector.detect_project(pdir)
+                test_cmd = profile.get("test_cmd", "pytest")
+                success, ret_code, out = self.terminal_ctrl.run_command(test_cmd, cwd=pdir, timeout=30)
+                msg = f"Investigated {profile.get('framework')} at {pdir}. Verification output: {out[:300]}"
 
             else:
                 return False, f"Unsupported action: '{action}'."

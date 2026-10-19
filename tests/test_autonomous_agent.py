@@ -30,6 +30,11 @@ from core.executor import ActionExecutor
 from core.planner import AutonomousPlanner
 from core.agent import JarvisAgent
 from llm.mock_provider import MockProvider
+from core.fast_router import FastRouter
+from computer.app_indexer import AppIndexer
+from computer.system_monitor import SystemMonitor
+from ai.research_agent import ResearchAgent
+from core.project_detector import ProjectDetector
 
 
 def test_consistent_voice_identity():
@@ -175,3 +180,82 @@ def test_planner_verification_loop():
 
     ok, summary = planner.execute_goal("Check battery status", speaker=SpeakerClassification.OWNER)
     assert bool(summary)
+
+
+def test_fast_router_classification():
+    """Verify FastRouter correctly resolves instant sub-second local intents."""
+    router = FastRouter()
+
+    # Hearing check
+    res = router.try_fast_path("Can you hear me?")
+    assert res is not None
+    assert res[0] == "hear_check"
+    assert "hear you clearly" in res[1]
+
+    # Greeting
+    res = router.try_fast_path("Hello Jarvis")
+    assert res is not None
+    assert res[0] == "greeting"
+    assert "Sanjay" in res[1]
+
+    # Time
+    res = router.try_fast_path("What time is it?")
+    assert res is not None
+    assert res[0] == "datetime"
+    assert "Sir" in res[1]
+
+    # Battery
+    res = router.try_fast_path("Check battery status")
+    assert res is not None
+    assert res[0] == "battery"
+    assert "battery is at" in res[1].lower()
+
+
+def test_app_indexer_catalog():
+    """Verify AppIndexer maps system apps, aliases, and rejects Store redirects."""
+    indexer = AppIndexer()
+    calc_info = indexer.find_app("calc")
+    assert calc_info is not None
+    assert "calc" in calc_info["launch_cmd"].lower()
+
+    chrome_info = indexer.find_app("chrome")
+    assert chrome_info is not None
+    assert "chrome" in chrome_info["launch_cmd"].lower()
+
+    settings_info = indexer.find_app("settings")
+    assert settings_info is not None
+    assert "ms-settings:" in settings_info["launch_cmd"]
+
+
+def test_system_monitor_diagnostics():
+    """Verify SystemMonitor collects real telemetry and provides actionable performance diagnosis."""
+    monitor = SystemMonitor()
+    vitals = monitor.get_system_vitals()
+
+    assert "cpu_percent" in vitals
+    assert "memory_percent" in vitals
+    assert "disk_percent" in vitals
+    assert "battery" in vitals
+    assert isinstance(vitals["top_apps"], list)
+
+    ok, diagnosis = monitor.diagnose_performance()
+    assert ok is True
+    assert "CPU" in diagnosis or "healthy" in diagnosis or "RAM" in diagnosis
+
+
+def test_project_detector_analysis():
+    """Verify ProjectDetector correctly identifies framework and execution runner commands."""
+    detector = ProjectDetector()
+    current_proj = detector.detect_project(os.getcwd())
+
+    assert current_proj["type"] == "python"
+    assert current_proj["test_cmd"] == "pytest"
+    assert current_proj["run_cmd"] is not None
+
+
+def test_research_agent_offline_fallback():
+    """Verify ResearchAgent graceful handling when offline or without Gemini."""
+    agent = ResearchAgent(gemini_client=None)
+    ok, res = agent.research_topic("Python 3.12 release date")
+    assert ok is True
+    assert len(res) > 0
