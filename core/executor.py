@@ -5,6 +5,7 @@ Never executes raw or unvalidated commands directly.
 Enforces defense-in-depth with mandatory confirmation on Level 3/4 sensitive actions.
 """
 
+import os
 from typing import Dict, Any, Tuple, Optional
 from config.constants import RiskLevel, SpeakerClassification, ActionStatus
 from core.permissions import PermissionManager
@@ -22,6 +23,10 @@ from computer.terminal_controller import TerminalController
 from computer.system_monitor import SystemMonitor
 from ai.research_agent import ResearchAgent
 from core.project_detector import ProjectDetector
+from core.tool_result import ToolResult
+from core.normalizer import Normalizer
+from core.multi_step_executor import MultiStepExecutor
+from vision.screen_understanding import ScreenVision
 
 
 class ActionExecutor:
@@ -36,6 +41,8 @@ class ActionExecutor:
         confirmation_mgr: Optional[ConfirmationManager] = None,
         audit_logger: Optional[AuditLogger] = None,
         secrets_mgr: Optional[SecretsManager] = None,
+        multi_step_executor: Optional[MultiStepExecutor] = None,
+        screen_vision: Optional[ScreenVision] = None,
     ):
         self.permission_mgr = permission_mgr or PermissionManager()
         self.risk_engine = risk_engine or RiskEngine()
@@ -51,6 +58,15 @@ class ActionExecutor:
         self.keyboard_ctrl = KeyboardController()
         self.browser_ctrl = BrowserController(keyboard=self.keyboard_ctrl)
         self.terminal_ctrl = TerminalController()
+
+        # Multi-Step & Vision Subsystems
+        self.multi_step_executor = multi_step_executor or MultiStepExecutor(
+            app_indexer=self.app_ctrl.indexer,
+            win_ctrl=self.win_ctrl,
+            keyboard_ctrl=self.keyboard_ctrl,
+            file_mgr=self.file_mgr,
+        )
+        self.screen_vision = screen_vision or ScreenVision()
 
         # Performance, Research, & Project Automation Subsystems
         self.sys_monitor = SystemMonitor()
@@ -88,7 +104,7 @@ class ActionExecutor:
                 status=ActionStatus.DENIED,
                 details={"reason": reason},
             )
-            return False, reason
+            return ToolResult.fail(action=act_clean, message=reason)
 
         # Step 3: Mandatory Confirmation Check for High Risk (Level 3/4)
         if risk_level >= RiskLevel.LEVEL_3_SENSITIVE and not confirmed:
@@ -105,21 +121,111 @@ class ActionExecutor:
                 risk_level=risk_level,
                 status=ActionStatus.AWAITING_CONFIRMATION,
             )
-            return False, prompt
+            return ToolResult.fail(action=act_clean, message=prompt)
 
         # Step 4: Dispatch to Safe Native Controllers
         success = False
         msg = ""
 
         try:
-            # 1. Applications
+            # 1. Applications & Websites
             if act_clean in ["open_application", "open_app"]:
                 target = params.get("target") or params.get("app") or params.get("name", "")
-                success, msg = self.app_ctrl.open_application(target)
+                clean_target = Normalizer.clean_text(str(target))
+
+                # Requirement D: Check if target is a website alias or URL
+                if (
+                    clean_target in Normalizer.KNOWN_WEBSITES
+                    or clean_target.startswith("http://")
+                    or clean_target.startswith("https://")
+                    or any(clean_target.endswith(tld) for tld in [".com", ".org", ".net", ".io", ".in", ".co", ".ai", ".dev", ".app"])
+                ):
+                    url = Normalizer.KNOWN_WEBSITES.get(clean_target, clean_target if clean_target.startswith("http") else f"https://{clean_target}")
+                    browser = params.get("browser")
+                    res = self.browser_ctrl.open_website(url=url, browser=browser, site_name=clean_target)
+                    success = res.success
+                    msg = res.message
+                else:
+                    # Requirement C & E: Resolve deterministic app alias
+                    app_key = Normalizer.APP_ALIASES.get(clean_target, clean_target)
+                    res = self.app_ctrl.open_application(app_key)
+                    if isinstance(res, ToolResult):
+                        success = res.success
+                        msg = res.message
+                    else:
+                        success, msg = res
+
+            elif act_clean in ["open_website", "open_site"]:
+                url = params.get("url") or params.get("target") or params.get("site", "")
+                browser = params.get("browser")
+                site_name = params.get("site_name") or params.get("name")
+                res = self.browser_ctrl.open_website(url=url, browser=browser, site_name=site_name)
+                success = res.success
+                msg = res.message
+
+            elif act_clean in ["search_youtube", "youtube_search"]:
+                query = params.get("query") or params.get("search", "")
+                browser = params.get("browser")
+                res = self.browser_ctrl.search_youtube(query, browser=browser)
+                success = res.success
+                msg = res.message
+
+            elif act_clean in ["play_youtube", "play_song", "play_music"]:
+                query = params.get("query") or params.get("song") or params.get("track", "")
+                browser = params.get("browser")
+                if any(term in query.lower() for term in ["latest", "trending", "current", "new", "top"]):
+                    success = False
+                    msg = "Sir, current web search is unavailable, so I cannot reliably select the latest Tamil song."
+                else:
+                    res = self.browser_ctrl.play_youtube(query, browser=browser)
+                    success = res.success
+                    msg = res.message
+
+            elif act_clean == "multi_step":
+                sub_act = params.get("action", "")
+                if sub_act == "notepad_type_save":
+                    res = self.multi_step_executor.execute_notepad_flow(
+                        text=params.get("text", ""),
+                        save_file=params.get("save_file"),
+                        location=params.get("location", "desktop"),
+                    )
+                    success = res.success
+                    msg = res.message
+                elif sub_act == "save_file":
+                    res = self.multi_step_executor.execute_save_file(
+                        filename=params.get("filename", ""),
+                        location=params.get("location", "desktop"),
+                        content=params.get("content", ""),
+                    )
+                    success = res.success
+                    msg = res.message
+                else:
+                    success = False
+                    msg = f"Unknown multi-step action: '{sub_act}'."
+
+            elif act_clean == "save_file":
+                filename = params.get("filename") or params.get("name") or params.get("path", "")
+                location = params.get("location", "desktop")
+                content = params.get("content", "")
+                res = self.multi_step_executor.execute_save_file(
+                    filename=filename,
+                    location=location,
+                    content=content,
+                )
+                success = res.success
+                msg = res.message
+
+            elif act_clean in ["inspect_screen", "screen_vision", "screen_inspection"]:
+                query = params.get("query", "inspect screen")
+                res = self.screen_vision.inspect_screen(query, speaker)
+                success = res.success
+                msg = res.message
 
             elif act_clean in ["close_application", "close_app"]:
                 target = params.get("target") or params.get("app") or params.get("name", "")
-                success, msg = self.app_ctrl.close_application(target)
+                clean_target = Normalizer.clean_text(str(target))
+                app_key = Normalizer.APP_ALIASES.get(clean_target, clean_target)
+                success, msg = self.app_ctrl.close_application(app_key)
 
             # 2. Window Management
             elif act_clean == "focus_window":
@@ -283,7 +389,7 @@ class ActionExecutor:
                 msg = f"Investigated {profile.get('framework')} at {pdir}. Verification output: {out[:300]}"
 
             else:
-                return False, f"Unsupported action: '{action}'."
+                return ToolResult.fail(action=act_clean, message=f"Unsupported action: '{action}'.")
 
         except Exception as e:
             success = False
@@ -292,7 +398,7 @@ class ActionExecutor:
         # Step 5: Audit Logging (secrets sanitized)
         status = ActionStatus.SUCCESS if success else ActionStatus.FAILED
         safe_params = self.secrets_mgr.sanitize(str(params))
-        safe_msg = self.secrets_mgr.sanitize(msg)
+        safe_msg = self.secrets_mgr.sanitize(str(msg))
 
         self.audit_logger.log_action(
             task=f"{action} {safe_params}",
@@ -303,4 +409,7 @@ class ActionExecutor:
             details={"result": safe_msg[:500]},
         )
 
-        return success, msg
+        if success:
+            return ToolResult.ok(action=act_clean, message=str(msg))
+        else:
+            return ToolResult.fail(action=act_clean, message=str(msg))

@@ -45,7 +45,14 @@ class Settings:
     preferred_title: str = "Sir"
 
     # AI Provider
-    llm_provider: str = "groq"
+    llm_provider: str = "openrouter"
+    openrouter_api_key: Optional[str] = None
+    openrouter_model: str = "meta-llama/llama-3.3-70b-instruct"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3:latest"
+
     groq_api_key: Optional[str] = None
     groq_model: str = "llama-3.3-70b-versatile"
     groq_stt_model: str = "whisper-large-v3-turbo"
@@ -55,13 +62,28 @@ class Settings:
     openai_api_key: Optional[str] = None
     elevenlabs_api_key: Optional[str] = None
 
-    # Voice Input (STT)
+    # Voice Input (STT) & VAD
     stt_engine: str = "groq_whisper"  # groq_whisper | google | local
     stt_language: str = "en-US"
-    stt_timeout_seconds: float = 6.0
-    stt_phrase_time_limit: float = 12.0
+    stt_timeout_seconds: float = 10.0
+    stt_phrase_time_limit: float = 60.0  # Generous safety timeout (not normal cutoff)
+    silence_threshold_seconds: float = 1.6  # Configurable end-of-speech silence (1.2 - 2.0s)
+    max_record_seconds: float = 60.0  # Maximum safety recording duration
     energy_threshold: int = 350
     dynamic_energy_threshold: bool = True
+
+    # Configurable VAD Rejection & Calibration Settings
+    vad_speech_threshold: int = 350
+    vad_min_speech_ms: int = 180
+    vad_end_silence_ms: int = 1600
+    vad_noise_calibration_seconds: float = 0.5
+
+    # Browser Configuration (Default: Microsoft Edge)
+    default_browser: str = "edge"
+
+    # Real-time Barge-In / Interruption
+    barge_in_enabled: bool = True
+    barge_in_cooldown_seconds: float = 0.25
 
     # Voice Output (TTS)
     tts_engine: str = "edge_tts"  # edge_tts | elevenlabs | pyttsx3
@@ -99,7 +121,12 @@ class Settings:
             owner_name=os.getenv("OWNER_NAME", "Sanjay"),
             assistant_name=os.getenv("ASSISTANT_NAME", "JARVIS"),
             preferred_title=os.getenv("PREFERRED_TITLE", "Sir"),
-            llm_provider=os.getenv("LLM_PROVIDER", "groq").lower(),
+            llm_provider=os.getenv("LLM_PROVIDER", "openrouter").lower(),
+            openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
+            openrouter_model=os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct"),
+            openrouter_base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+            ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+            ollama_model=os.getenv("OLLAMA_MODEL", "llama3:latest"),
             groq_api_key=os.getenv("GROQ_API_KEY"),
             groq_model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
             groq_stt_model=os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo"),
@@ -109,10 +136,19 @@ class Settings:
             elevenlabs_api_key=os.getenv("ELEVENLABS_API_KEY"),
             stt_engine=os.getenv("STT_ENGINE", "groq_whisper").lower(),
             stt_language=os.getenv("STT_LANGUAGE", "en-US"),
-            stt_timeout_seconds=float(os.getenv("STT_TIMEOUT_SECONDS", "6.0")),
-            stt_phrase_time_limit=float(os.getenv("STT_PHRASE_TIME_LIMIT", "12.0")),
-            energy_threshold=int(os.getenv("ENERGY_THRESHOLD", "350")),
+            stt_timeout_seconds=float(os.getenv("STT_TIMEOUT_SECONDS", "10.0")),
+            stt_phrase_time_limit=float(os.getenv("STT_PHRASE_TIME_LIMIT", "60.0")),
+            silence_threshold_seconds=float(os.getenv("SILENCE_THRESHOLD_SECONDS", os.getenv("VAD_END_SILENCE_MS", "1600"))) / (1000.0 if float(os.getenv("VAD_END_SILENCE_MS", "0")) > 50 else 1.0),
+            max_record_seconds=float(os.getenv("MAX_RECORD_SECONDS", "60.0")),
+            energy_threshold=int(os.getenv("ENERGY_THRESHOLD", os.getenv("VAD_SPEECH_THRESHOLD", "350"))),
             dynamic_energy_threshold=os.getenv("DYNAMIC_ENERGY_THRESHOLD", "true").lower() == "true",
+            vad_speech_threshold=int(os.getenv("VAD_SPEECH_THRESHOLD", os.getenv("ENERGY_THRESHOLD", "350"))),
+            vad_min_speech_ms=int(os.getenv("VAD_MIN_SPEECH_MS", "180")),
+            vad_end_silence_ms=int(os.getenv("VAD_END_SILENCE_MS", "1600")),
+            vad_noise_calibration_seconds=float(os.getenv("VAD_NOISE_CALIBRATION_SECONDS", "0.5")),
+            default_browser=os.getenv("DEFAULT_BROWSER", "edge").lower(),
+            barge_in_enabled=os.getenv("BARGE_IN_ENABLED", "true").lower() == "true",
+            barge_in_cooldown_seconds=float(os.getenv("BARGE_IN_COOLDOWN_SECONDS", "0.25")),
             tts_engine=os.getenv("TTS_ENGINE", "edge_tts").lower(),
             tts_voice=os.getenv("TTS_VOICE", "en-US-AndrewMultilingualNeural"),
             tts_rate=os.getenv("TTS_RATE", "+0%"),

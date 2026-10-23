@@ -1,9 +1,11 @@
 """
 Screen Understanding (ScreenVision) Subsystem
-Performs on-demand visual analysis using Gemini 3.8 Flash multimodal vision.
+Performs on-demand visual analysis using Gemini multimodal vision.
+Fulfills Requirement G: Never claims to see the screen unless a real vision tool executed successfully.
 """
 
 from typing import Optional, Dict, Any, Tuple
+from core.tool_result import ToolResult
 from vision.screen_capture import ScreenCapture
 from config.constants import SpeakerClassification
 from config.settings import get_settings
@@ -12,6 +14,7 @@ from config.settings import get_settings
 class ScreenVision:
     """
     Analyzes desktop screen and active window context on user request.
+    Strictly truthful: reports failure if vision capability is not currently active.
     """
 
     def __init__(self, capture: Optional[ScreenCapture] = None):
@@ -21,29 +24,39 @@ class ScreenVision:
         self,
         user_query: str,
         speaker: SpeakerClassification = SpeakerClassification.OWNER,
-    ) -> Tuple[bool, str]:
+    ) -> ToolResult:
         """
-        Captures the screen and asks Gemini multimodal model to analyze the UI/error.
-
-        Args:
-            user_query: Question about the screen (e.g. "What error is showing?")
-            speaker: Speaker requesting the screen analysis.
-
-        Returns:
-            (success: bool, explanation_or_error: str)
+        Captures the screen and asks multimodal model to analyze the UI/error.
+        Returns ToolResult. Never claims to see the screen if vision is not working.
         """
+        print(f"[ROUTER] intent=SCREEN_VISION query='{user_query}'")
+        print(f"[TOOL] screen_capture display")
+
         # Step 1: Detect active window
         win_info = self.capture.get_active_window_info()
 
         # Step 2: Privacy check
         if win_info.get("is_sensitive", False):
             if speaker != SpeakerClassification.OWNER:
-                return False, "Access denied: The active window contains sensitive private credentials."
+                print(f"[RESULT] success=False error='Privacy Block'")
+                return ToolResult.fail(
+                    action="inspect_screen",
+                    message="Access denied: The active window contains sensitive private credentials.",
+                    error="Sensitive window in foreground",
+                )
 
         # Step 3: Capture display
         img_bytes = self.capture.capture_bytes()
         if not img_bytes:
-            return False, "Could not capture display."
+            print(f"[VERIFY] screen_captured=False")
+            print(f"[RESULT] success=False")
+            return ToolResult.fail(
+                action="inspect_screen",
+                message="Sir, I was unable to capture your display.",
+                error="Display capture returned empty bytes",
+            )
+
+        print(f"[VERIFY] screen_captured=True bytes={len(img_bytes)}")
 
         # Step 4: Ask Gemini Vision
         cfg = get_settings()
@@ -66,9 +79,26 @@ class ScreenVision:
                         prompt,
                     ],
                 )
-                return True, response.text or "I inspected the screen, Sir."
+                analysis_text = (response.text or "").strip()
+                if analysis_text:
+                    print(f"[RESULT] success=True")
+                    return ToolResult.ok(
+                        action="inspect_screen",
+                        message=analysis_text,
+                        evidence=f"Active window: {win_info.get('title')}",
+                    )
             except Exception as e:
-                return False, f"Vision model error: {str(e)}"
+                print(f"[RESULT] success=False error='{str(e)}'")
+                return ToolResult.fail(
+                    action="inspect_screen",
+                    message="Sir, screen inspection isn't enabled yet, so I can't visually verify it.",
+                    error=f"Vision model error: {str(e)}",
+                )
 
-        # Offline fallback
-        return True, f"Active window is '{win_info.get('title')}'. No error visible in offline simulation mode."
+        # Requirement G: Truthful reporting when screen inspection is not enabled
+        print(f"[RESULT] success=False reason='Screen vision not enabled'")
+        return ToolResult.fail(
+            action="inspect_screen",
+            message="Sir, screen inspection isn't enabled yet, so I can't visually verify it.",
+            error="Vision API not active",
+        )

@@ -49,6 +49,7 @@ def main():
 
     if "--test" in sys.argv:
         print("[JARVIS] Executing Comprehensive Autonomous Verification Suite...\n")
+        # pyrefly: ignore[missing-import]
         import pytest
         exit_code = pytest.main(["-v", os.path.join(PROJECT_ROOT, "tests")])
         sys.exit(exit_code)

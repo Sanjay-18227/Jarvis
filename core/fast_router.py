@@ -1,24 +1,29 @@
 """
 JARVIS Fast Router Subsystem
-Fulfills Section 12: Hybrid Intelligence.
-Splits incoming intents into:
-- FAST PATH: Sub-second local actions (open app, battery, volume, time, "Can you hear me?", system diagnostics)
-- AI PATH: Autonomous Gemini multi-step reasoning, coding, screen vision, research, and planning.
-Avoids rigid keyword lists by matching semantic action patterns.
+Fulfills Section 12: Hybrid Intelligence & Requirements B, C, D, E, F, G, H, J:
+- Deterministic sub-second execution for all Windows local actions
+- Distinguishes websites from apps
+- Enforces real verification before reporting success
+- Clean debug logs [ROUTER], [TOOL], [VERIFY], [RESULT]
 """
 
 import re
 import datetime
 from typing import Optional, Tuple, Dict, Any
 from config.constants import SpeakerClassification
+from core.normalizer import Normalizer, IntentType
+from core.tool_result import ToolResult
 from computer.app_indexer import AppIndexer
 from computer.windows_controller import WindowsController
+from computer.browser_controller import BrowserController
 from computer.system_monitor import SystemMonitor
+from vision.screen_understanding import ScreenVision
+from core.multi_step_executor import MultiStepExecutor
 
 
 class FastRouter:
     """
-    Sub-second intent classifier and fast local executor.
+    Sub-second intent classifier and verified local executor.
     """
 
     def __init__(
@@ -26,10 +31,19 @@ class FastRouter:
         app_indexer: Optional[AppIndexer] = None,
         win_ctrl: Optional[WindowsController] = None,
         sys_monitor: Optional[SystemMonitor] = None,
+        browser_ctrl: Optional[BrowserController] = None,
+        screen_vision: Optional[ScreenVision] = None,
+        multi_step_executor: Optional[MultiStepExecutor] = None,
     ):
         self.app_indexer = app_indexer or AppIndexer()
         self.win_ctrl = win_ctrl or WindowsController()
         self.sys_monitor = sys_monitor or SystemMonitor()
+        self.browser_ctrl = browser_ctrl or BrowserController()
+        self.screen_vision = screen_vision or ScreenVision()
+        self.multi_step = multi_step_executor or MultiStepExecutor(
+            app_indexer=self.app_indexer,
+            win_ctrl=self.win_ctrl,
+        )
 
     def try_fast_path(
         self,
@@ -37,89 +51,128 @@ class FastRouter:
         speaker: SpeakerClassification = SpeakerClassification.OWNER,
     ) -> Optional[Tuple[str, str]]:
         """
-        Evaluates user text. If it is a common local OS action or conversational greeting,
-        executes immediately on Fast Path.
+        Evaluates user text. If it is a deterministic local action, website, app,
+        or multi-step command, executes and verifies immediately on Fast Path.
 
         Returns:
             (action_name, spoken_response) if handled on Fast Path, else None.
         """
-        # Normalize and strip trailing punctuation
-        t = text.lower().strip()
-        t = re.sub(r"[?!.,]+$", "", t).strip()
+        intent, params = Normalizer.classify_intent(text)
 
-        # 1. Connection / Hearing checks ("Can you hear me?", "Are you there?")
-        if any(phrase in t or t == phrase for phrase in [
-            "can you hear me", "are you there", "do you hear me", "you hear me", "can u hear me", "are you listening", "hear me"
-        ]):
+        # 1. Connection / Hearing check
+        if intent == IntentType.HEAR_CHECK:
+            print(f"[ROUTER] intent=HEAR_CHECK")
             return "hear_check", "Yep, Sir. I can hear you clearly."
 
-        # Strip polite conversational prefixes & wake words
-        for prefix in ["hey jarvis ", "jarvis ", "ok jarvis ", "okay jarvis ", "please ", "can you ", "could you "]:
-            if t.startswith(prefix):
-                t = t[len(prefix):].strip()
-
-        # Strip trailing wake word e.g. "hello jarvis" -> "hello"
-        if t.endswith(" jarvis"):
-            t = t[:-7].strip()
-
-        # 2. Greetings ("Hello", "Good morning", "Hi Jarvis")
-        if t in ["hello", "hi", "hey", "good morning", "good evening", "good afternoon", "vanakkam", "வணக்கம்"] or any(t == g or t.startswith(g + " ") for g in ["hello", "hi", "hey", "good morning", "good evening", "vanakkam"]):
+        # 2. Greetings
+        if intent == IntentType.GREETING:
+            print(f"[ROUTER] intent=GREETING")
             return "greeting", "Hello Sanjay. How can I assist you today, Sir?"
 
         # 3. Battery status
-        if any(k in t for k in ["battery status", "battery percentage", "what is my battery", "how much battery", "battery percent", "charge remaining"]):
+        if intent == IntentType.BATTERY:
+            print(f"[ROUTER] intent=BATTERY")
             vitals = self.sys_monitor.get_system_vitals()
             pct = vitals["battery"]["percent"]
             plugged = vitals["battery"]["plugged"]
             status_desc = "charging" if plugged else "discharging"
             return "battery", f"Your battery is at {pct}%, currently {status_desc}, Sir."
 
-        # 4. Laptop Performance / Slow Diagnosis ("Why is my laptop slow?")
-        if any(k in t for k in ["why is my laptop slow", "laptop slow", "why is the pc lagging", "check performance", "system performance", "system vitals"]):
+        # 4. Diagnostics ("Why is my laptop slow?")
+        if intent == IntentType.DIAGNOSTICS:
+            print(f"[ROUTER] intent=DIAGNOSTICS")
             _, diagnosis = self.sys_monitor.diagnose_performance()
             return "diagnostics", diagnosis
 
-        # 5. Current Time & Date
-        if any(t == phrase or t.startswith(phrase) for phrase in ["what time is it", "what is the time", "tell me the time", "current time", "what day is it", "whats the date", "what is today's date"]):
+        # 5. Date / Time
+        if intent == IntentType.DATETIME:
+            print(f"[ROUTER] intent=DATETIME")
             now = datetime.datetime.now()
             time_str = now.strftime("%I:%M %p")
             date_str = now.strftime("%A, %B %d")
             return "datetime", f"It's {time_str} on {date_str}, Sir."
 
         # 6. Media / Volume Controls
-        if t in ["volume up", "satham yethu", "sound up"]:
-            self.win_ctrl.control_media("volume_up")
-            return "volume", "Volume increased, Sir."
-        elif t in ["volume down", "satham kura", "sound down"]:
-            self.win_ctrl.control_media("volume_down")
-            return "volume", "Volume decreased, Sir."
-        elif t in ["mute", "unmute"]:
-            self.win_ctrl.control_media("mute")
-            return "volume", "Mute toggled, Sir."
-        elif t in ["play music", "pause music", "pause", "resume"]:
-            self.win_ctrl.control_media("play_pause")
+        if intent == IntentType.MEDIA_CONTROL:
+            act = params.get("action", "play_pause")
+            print(f"[ROUTER] intent=MEDIA_CONTROL action={act}")
+            self.win_ctrl.control_media(act)
+            if act == "volume_up":
+                return "volume", "Volume increased, Sir."
+            elif act == "volume_down":
+                return "volume", "Volume decreased, Sir."
+            elif act == "mute":
+                return "volume", "Mute toggled, Sir."
             return "media", "Playback toggled, Sir."
 
         # 7. Lock Screen
-        if t in ["lock screen", "lock workstation", "lock the laptop", "lock system", "screen lock"]:
+        if intent == IntentType.LOCK_SCREEN:
+            print(f"[ROUTER] intent=LOCK_SCREEN")
             self.win_ctrl.lock_workstation()
             return "lock", "Workstation locked, Sir."
 
-        # 8. Fast App Launch ("Open <app>")
-        # Avoid routing multi-step tasks like "Open Antigravity and build this project" to fast path!
-        if (t.startswith("open ") or t.startswith("launch ")) and not any(k in t for k in ["and", "then", "project", "why", "error", "build"]):
-            target = t.split(" ", 1)[1].replace("the ", "").replace("application", "").replace("app", "").strip()
-            if target and len(target) < 30:
-                success, msg = self.app_indexer.launch_app(target)
-                return "open_app", msg
+        # Security gate for UNKNOWN speaker on Fast Path
+        if speaker == SpeakerClassification.UNKNOWN:
+            clean_lower = text.lower()
+            if any(w in clean_lower for w in ["delete", "remove", "destroy", "powershell", "cmd", "terminal", "format", "wipe", "private"]):
+                return "security_denied", "Access denied. System modifications, file deletions, and private data access are restricted to the owner."
 
-        # 9. Tanglish / Tamil simple app launch (e.g. "Chrome open pannu", "calc open pannu")
-        tamil_app_match = re.search(r"([a-zA-Z0-9 ]+?)\s*(open\s*பண்ணு|open\s*pan+u|open\s*karo)", t)
-        if tamil_app_match and not any(k in t for k in ["and", "then", "project", "check", "error"]):
-            target = tamil_app_match.group(1).strip()
-            if target:
-                success, msg = self.app_indexer.launch_app(target)
-                return "open_app", msg
+        # 8. Website Routing (Requirement D: Open YouTube, Google, GitHub, etc.)
+        if intent == IntentType.OPEN_WEBSITE:
+            res = self.browser_ctrl.open_website(
+                url=params["url"],
+                browser=params.get("browser"),
+                site_name=params.get("site_name"),
+            )
+            return "open_website", res.message
 
-        # No fast path: Delegate to AI Path (Gemini with tools)
+        # 9. YouTube Search & Music Commands (Requirement D & H)
+        if intent == IntentType.SEARCH_YOUTUBE:
+            res = self.browser_ctrl.search_youtube(params["query"])
+            return "search_youtube", res.message
+
+        if intent == IntentType.PLAY_YOUTUBE:
+            res = self.browser_ctrl.play_youtube(params["query"])
+            return "play_youtube", res.message
+
+        if intent == IntentType.PLAY_LATEST_MUSIC:
+            q = params.get("query", "latest songs")
+            print(f"[ROUTER] intent=PLAY_LATEST_MUSIC query='{q}'")
+            res = self.browser_ctrl.search_youtube(q)
+            return "play_music", f"I opened the YouTube search results for {q}, Sir."
+
+        # 9.5 General Web Searches (Requirement D)
+        if intent == IntentType.SEARCH_WEB:
+            res = self.browser_ctrl.search_web(params["query"])
+            return "search_web", res.message
+
+        # 10. Application Launching (Requirement B, C, E)
+        if intent == IntentType.OPEN_APP:
+            app_key = params.get("app_key") or params.get("raw_name", "")
+            res = self.app_indexer.launch_app(app_key)
+            return "open_app", res.message
+
+        # 11. Multi-Step Execution (Requirement F)
+        if intent == IntentType.MULTI_STEP:
+            action = params.get("action")
+            if action == "notepad_type_save":
+                res = self.multi_step.execute_notepad_flow(
+                    text=params.get("text", ""),
+                    save_file=params.get("save_file"),
+                    location=params.get("location", "desktop"),
+                )
+                return "multi_step", res.message
+            elif action == "save_file":
+                res = self.multi_step.execute_save_file(
+                    filename=params.get("filename"),
+                    location=params.get("location", "desktop"),
+                )
+                return "multi_step", res.message
+
+        # 12. Screen Vision Queries (Requirement G: Never hallucinate)
+        if intent == IntentType.SCREEN_VISION:
+            res = self.screen_vision.inspect_screen(params.get("query", text), speaker)
+            return "screen_vision", res.message
+
+        # Fall through to AI Path (Autonomous Planner / LLM reasoning)
         return None

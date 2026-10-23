@@ -63,7 +63,8 @@ class AppController:
                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
                 )
                 time.sleep(0.5)
-                return True, f"{app_name.capitalize()} terminated."
+                if not self.is_process_running(proc):
+                    return True, f"{app_name.capitalize()} terminated."
             except Exception:
                 pass
 

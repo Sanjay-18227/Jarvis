@@ -47,6 +47,23 @@ class AIProvider(ABC):
         """
         pass
 
+    def plan_with_tools(
+        self,
+        goal: str,
+        tools: List[Dict[str, Any]],
+        system_prompt: Optional[str] = None,
+        history: Optional[List[Dict[str, str]]] = None,
+        screen_context: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Reasons about the user's goal with available tools.
+        Returns structured plan containing:
+        - 'thought': reasoning
+        - 'tool_calls': list of {name, parameters}
+        - 'response': optional direct answer
+        """
+        return {"thought": "Tool planning not implemented for this provider.", "tool_calls": [], "response": None}
+
     def generate_stream(
         self,
         prompt: str,
@@ -60,3 +77,4 @@ class AIProvider(ABC):
         Default implementation yields the complete generated text.
         """
         yield self.generate(prompt, system_prompt, history, max_tokens, temperature)
+

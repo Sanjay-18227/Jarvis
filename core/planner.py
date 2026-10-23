@@ -76,8 +76,59 @@ class AutonomousPlanner:
             tool_calls = plan.get("tool_calls", [])
             direct_response = plan.get("response")
 
-            # If Gemini produced a direct conversational response without tools, return it
+            # If Gemini produced a direct conversational response without tools, check if goal is an action
             if not tool_calls:
+                from core.normalizer import Normalizer, IntentType
+                intent, params = Normalizer.classify_intent(goal)
+
+                # If intent is an executable computer action or screen vision, execute via trusted executor
+                if intent in [
+                    IntentType.OPEN_APP,
+                    IntentType.OPEN_WEBSITE,
+                    IntentType.SEARCH_YOUTUBE,
+                    IntentType.PLAY_YOUTUBE,
+                    IntentType.PLAY_LATEST_MUSIC,
+                    IntentType.SEARCH_WEB,
+                    IntentType.MULTI_STEP,
+                    IntentType.SCREEN_VISION,
+                ]:
+                    if intent == IntentType.OPEN_APP:
+                        exec_res = self.executor.execute_action("open_application", {"target": params.get("app_key") or params.get("raw_name")}, speaker=speaker)
+                    elif intent == IntentType.OPEN_WEBSITE:
+                        exec_res = self.executor.execute_action("open_website", params, speaker=speaker)
+                    elif intent in [IntentType.SEARCH_YOUTUBE, IntentType.PLAY_LATEST_MUSIC]:
+                        exec_res = self.executor.execute_action("search_youtube", params, speaker=speaker)
+                    elif intent == IntentType.PLAY_YOUTUBE:
+                        exec_res = self.executor.execute_action("play_youtube", params, speaker=speaker)
+                    elif intent == IntentType.SEARCH_WEB:
+                        exec_res = self.executor.execute_action("search_web", params, speaker=speaker)
+                    elif intent == IntentType.MULTI_STEP:
+                        exec_res = self.executor.execute_action("multi_step", params, speaker=speaker)
+                    elif intent == IntentType.SCREEN_VISION:
+                        exec_res = self.screen_vision.inspect_screen(params.get("query", goal), speaker=speaker)
+
+                    s_ok = exec_res.success if hasattr(exec_res, "success") else exec_res[0]
+                    s_msg = exec_res.message if hasattr(exec_res, "message") else exec_res[1]
+                    if s_ok:
+                        self.task_manager.mark_completed(s_msg)
+                    else:
+                        self.task_manager.mark_failed(s_msg)
+                    return s_ok, s_msg
+
+                # Requirement: If goal is an action request, NEVER allow free-form LLM text to claim success
+                lower_resp = (direct_response or "").lower()
+                action_words = ["open", "launch", "type", "save", "click", "screen", "play", "start", "see"]
+                forbidden_claims = [
+                    "i opened", "i launched", "i can see", "i see it", "i typed", "i saved",
+                    "i played", "i've opened", "i've launched", "i've typed", "i've saved",
+                    "opened it", "launched it", "typed it", "saved it", "played it",
+                    "see your screen", "i checked the screen", "i see the desktop", "is now open"
+                ]
+                if any(w in goal.lower() for w in action_words) and any(c in lower_resp for c in forbidden_claims):
+                    blocked_msg = f"Sir, I could not verify executing '{goal}' because no verified computer action was observed."
+                    self.task_manager.mark_failed(blocked_msg)
+                    return False, blocked_msg
+
                 if direct_response and direct_response not in ["Offline fallback.", None]:
                     self.task_manager.mark_completed(direct_response)
                     return True, direct_response
@@ -120,19 +171,20 @@ class AutonomousPlanner:
                 if "confirmation" in exec_msg.lower() or "shall i proceed" in exec_msg.lower() or "confirm" in exec_msg.lower():
                     return False, exec_msg
 
-            # Verify: Ask Gemini if goal is completed or what step remains
-            verification_prompt = (
-                f"User Goal: {goal}\n"
-                f"Observations so far:\n{chr(10).join(accumulated_observations)}\n\n"
-                "Did we achieve the goal and verify the result? If yes, answer 'COMPLETED: <friendly natural summary for Sanjay>'. "
-                "If errors occurred and need fixing, explain what you will fix. If cannot proceed, explain the blocker honestly."
-            )
+            # Verify: Ask Gemini if goal is completed or what step remains (only if last_action_success is True)
+            if last_action_success:
+                verification_prompt = (
+                    f"User Goal: {goal}\n"
+                    f"Observations so far:\n{chr(10).join(accumulated_observations)}\n\n"
+                    "Did we achieve the goal and verify the result? If yes, answer 'COMPLETED: <friendly natural summary for Sanjay>'. "
+                    "If errors occurred and need fixing, explain what you will fix. If cannot proceed, explain the blocker honestly."
+                )
 
-            v_resp = self.client.generate(verification_prompt, system_prompt=system_prompt)
-            if "COMPLETED:" in v_resp:
-                summary = v_resp.split("COMPLETED:", 1)[1].strip()
-                self.task_manager.mark_completed(summary)
-                return True, summary
+                v_resp = self.client.generate(verification_prompt, system_prompt=system_prompt)
+                if "COMPLETED:" in v_resp:
+                    summary = v_resp.split("COMPLETED:", 1)[1].strip()
+                    self.task_manager.mark_completed(summary)
+                    return True, summary
 
         # Final Summary formulation based on actual verified steps
         final_summary = self._generate_final_summary(goal, accumulated_observations, last_action_success)
@@ -150,6 +202,16 @@ class AutonomousPlanner:
     ) -> str:
         """Formulates a natural, friendly verbal summary addressing Sanjay / Sir."""
         obs_text = "\n".join(observations[-3:]) if observations else "Action processed."
+
+        # Requirement A: If success is False, NEVER say Opened, Done, Completed, Playing, Saved
+        if not success:
+            last_err = observations[-1] if observations else "Action execution could not be verified."
+            if "Result: " in last_err:
+                clean_err = last_err.split("Result: ", 1)[1].strip()
+            else:
+                clean_err = last_err
+            return f"Sir, I tried to complete that action, but {clean_err}."
+
         prompt = (
             f"User Goal: {goal}\n"
             f"Execution Steps & Observations:\n{obs_text}\n\n"
@@ -160,6 +222,4 @@ class AutonomousPlanner:
         try:
             return self.client.generate(prompt)
         except Exception:
-            if success:
-                return f"Done, Sir. I completed the request and verified the result."
-            return f"Sir, I ran into an issue while working on that. Let me know if you want me to inspect it further."
+            return f"Done, Sir. I completed the request and verified the result."

@@ -92,13 +92,23 @@ OWNER_NAME=Sanjay
 ASSISTANT_NAME=JARVIS
 PREFERRED_TITLE=Sir
 
-# AI Brain: Google Gemini 3.8 Flash
-LLM_PROVIDER=gemini
-GEMINI_API_KEY=your_gemini_api_key_here
-GEMINI_MODEL=gemini-3.8-flash
+# AI Brain Options: openrouter | gemini | groq | ollama
+LLM_PROVIDER=openrouter
+OPENROUTER_API_KEY=your_openrouter_api_key_here
+OPENROUTER_MODEL=meta-llama/llama-3.3-70b-instruct
+
+# Or Google Gemini:
+# LLM_PROVIDER=gemini
+# GEMINI_API_KEY=your_gemini_api_key_here
+# GEMINI_MODEL=gemini-3.8-flash
+
+# Or Local Offline Ollama:
+# LLM_PROVIDER=ollama
+# OLLAMA_BASE_URL=http://localhost:11434
+# OLLAMA_MODEL=llama3:latest
 
 # Speech Engines (Single Consistent Multilingual Voice)
-STT_ENGINE=google
+STT_ENGINE=groq_whisper
 TTS_ENGINE=edge_tts
 TTS_VOICE=en-US-AndrewMultilingualNeural
 ```
@@ -110,7 +120,7 @@ python main.py --enroll
 ```
 
 ### 3. Run Autonomous Verification Test Suite
-Verify all 33 unit, security, and autonomous computer-use tests:
+Verify all 76 unit, security, LLM provider, reliability, and barge-in tests:
 ```powershell
 python main.py --test
 ```

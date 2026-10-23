@@ -36,6 +36,8 @@ from voice.stt import SpeechToText
 from voice.tts import TextToSpeech
 from voice.wake_word import WakeWordDetector
 from voice.speaker_verification import SpeakerVerifier
+from voice.state_machine import VoiceState, VoiceStateMachine
+from voice.barge_in import BargeInDetector
 from memory.conversation_memory import ConversationMemory
 from memory.preferences import PreferencesManager
 from security.privacy_guard import PrivacyGuard
@@ -47,7 +49,7 @@ from core.fast_router import FastRouter
 
 class JarvisAgent:
     """
-    JARVIS Central Autonomous Desktop AI Agent for Sanjay.
+    JARVIS Central Autonomous Desktop AI Agent.
     """
 
     def __init__(
@@ -57,28 +59,32 @@ class JarvisAgent:
     ):
         self.settings = settings or get_settings()
 
-        # AI & Gemini Client
+        # AI & LLM Provider (OpenRouter, Gemini, Groq, Ollama, Mock)
         if provider:
             self.provider = provider
-            if isinstance(provider, GeminiClient):
-                self.gemini_client = provider
-            else:
-                self.gemini_client = GeminiClient(
-                    api_key=self.settings.gemini_api_key,
-                    model=self.settings.gemini_model or "gemini-3.8-flash",
-                )
+        else:
+            from llm.provider_factory import get_llm_provider
+            self.provider = get_llm_provider(settings=self.settings)
+
+        if isinstance(self.provider, GeminiClient):
+            self.gemini_client = self.provider
         else:
             self.gemini_client = GeminiClient(
                 api_key=self.settings.gemini_api_key,
                 model=self.settings.gemini_model or "gemini-3.8-flash",
             )
-            self.provider = self.gemini_client
 
-        # Voice Subsystems (Single Consistent Voice Identity)
+        # Voice Subsystems (Single Consistent Voice Identity) & State Machine
+        self.state_machine = VoiceStateMachine(initial_state=VoiceState.IDLE)
         self.recorder = AudioRecorder(settings=self.settings)
         self.stt = SpeechToText(settings=self.settings)
         self.tts = TextToSpeech(settings=self.settings)
         self.verifier = SpeakerVerifier()
+        self.barge_in = BargeInDetector(
+            settings=self.settings,
+            stt=self.stt,
+            verifier=self.verifier,
+        )
         self.wake_word = WakeWordDetector(on_wake=self._on_wake_word_triggered, settings=self.settings)
 
         # Memory & Preferences
@@ -112,15 +118,18 @@ class JarvisAgent:
             tool_catalog=self.tool_catalog,
         )
 
-        # Wire research agent to Gemini client if available
-        if hasattr(self.executor, "research_agent") and self.gemini_client:
-            self.executor.research_agent.gemini = self.gemini_client
+        # Wire research agent to active AI provider / Gemini client
+        if hasattr(self.executor, "research_agent"):
+            self.executor.research_agent.gemini = self.provider if self.provider.is_available() else self.gemini_client
 
         # Hybrid Fast Router (Sub-second local OS actions & conversational greetings)
         self.fast_router = FastRouter(
             app_indexer=self.executor.app_ctrl.indexer,
             win_ctrl=self.executor.win_ctrl,
             sys_monitor=self.executor.sys_monitor,
+            browser_ctrl=self.executor.browser_ctrl,
+            screen_vision=self.screen_vision,
+            multi_step_executor=self.executor.multi_step_executor,
         )
 
         self._running = False
@@ -141,11 +150,14 @@ class JarvisAgent:
 
     def emergency_stop(self):
         """Global emergency stop phrase 'Jarvis stop' immediately halts active automation."""
+        self.state_machine.set_state(VoiceState.INTERRUPTED)
         self.tts.stop()
         self.recorder.interrupt()
         self.task_manager.request_emergency_stop()
         self.confirmation_mgr.cancel_pending()
         print("[JARVIS] Emergency stop executed. All active automation halted.")
+        self.state_machine.set_state(VoiceState.LISTENING)
+
 
     def build_system_prompt(self) -> str:
         """Constructs persona system prompt tailored to Sanjay."""
@@ -219,6 +231,8 @@ class JarvisAgent:
         fast_result = self.fast_router.try_fast_path(clean_input, active_speaker)
         if fast_result is not None:
             action_name, fast_resp = fast_result
+            if action_name not in ["chat", "greeting"]:
+                self.state_machine.set_state(VoiceState.EXECUTING)
             self.memory.add_user_message(clean_input)
             self.memory.add_assistant_message(fast_resp)
             self.audit_logger.log_action(
@@ -233,12 +247,14 @@ class JarvisAgent:
 
         # Step 3: Screen Vision Direct Check
         if any(term in clean_input.lower() for term in ["what is this error", "look at my screen", "look at screen", "what's wrong here", "what is on my screen"]):
+            self.state_machine.set_state(VoiceState.EXECUTING)
             _, vision_resp = self.screen_vision.inspect_screen(clean_input, active_speaker)
             self.memory.add_user_message(clean_input)
             self.memory.add_assistant_message(vision_resp)
             return vision_resp
 
         # Step 4: Autonomous Goal-Oriented Computer & Tool Planning
+        self.state_machine.set_state(VoiceState.EXECUTING)
         system_prompt = self.build_system_prompt()
         success, final_response = self.planner.execute_goal(
             goal=clean_input,
@@ -263,28 +279,60 @@ class JarvisAgent:
 
         return final_response
 
-    def speak_response(self, text: str):
+    def speak_response(self, text: str) -> bool:
         """
-        Speaks the response using ONE consistent neural voice identity
-        regardless of whether text is English, Tamil, Tanglish, or Hindi.
+        Speaks the response using ONE consistent neural voice identity.
+        Monitors concurrently for user barge-in / interruption phrases while speaking.
         """
         if not text:
-            return
+            return False
         # Sanitizes any accidental credentials or markdown
         safe_to_speak, safe_text = self.secrets_mgr.validate_safe_for_speech(text)
         # Use single unified multilingual voice identity
         voice = self.multilingual.get_preferred_voice_for_language("multilingual")
-        self.tts.speak(safe_text, voice=voice)
+
+        # State transition to SPEAKING
+        self.state_machine.set_state(VoiceState.SPEAKING)
+
+        # Start playback asynchronously on dedicated worker thread
+        playback_thread = self.tts.speak_async(safe_text, voice=voice)
+
+        # Run concurrent barge-in monitoring while TTS is speaking
+        if getattr(self.settings, "barge_in_enabled", True):
+            detected_phrase = self.barge_in.listen_for_interruption(
+                self.tts,
+                current_speaking_text=safe_text,
+            )
+            if detected_phrase:
+                print(f'[BARGE-IN] Detected: "{detected_phrase}"')
+                self.state_machine.set_state(VoiceState.INTERRUPTED)
+                self.tts.stop()
+                if playback_thread and playback_thread.is_alive():
+                    playback_thread.join(timeout=1.0)
+                # Immediately return to LISTENING
+                self.state_machine.set_state(VoiceState.LISTENING)
+                return False
+
+        if playback_thread and playback_thread.is_alive():
+            playback_thread.join(timeout=60.0)
+
+        # Automatically return to LISTENING after completed response
+        self.state_machine.set_state(VoiceState.LISTENING)
+        return True
 
     def run_turn(self) -> Optional[str]:
         """
         Executes one full voice turn:
-        Listen -> Acoustic Speaker Verification -> STT -> Autonomous Agent Reasoning -> Multilingual TTS.
+        LISTENING -> Speech Detection (VAD) -> End-of-Speech -> PROCESSING -> EXECUTING (if required) -> SPEAKING -> LISTENING.
         """
+        self.state_machine.set_state(VoiceState.LISTENING)
         print("\n[JARVIS] Listening...")
-        audio_data = self.recorder.record_phrase(timeout=6.0)
+        audio_data = self.recorder.record_phrase()
         if not audio_data:
             return None
+
+        # State transition to PROCESSING
+        self.state_machine.set_state(VoiceState.PROCESSING)
 
         # Speaker Verification
         speaker, confidence = self.verifier.verify_speaker(audio_data)
@@ -293,6 +341,7 @@ class JarvisAgent:
         # Transcribe
         transcription = self.stt.transcribe(audio_data)
         if not transcription:
+            self.state_machine.set_state(VoiceState.LISTENING)
             return None
 
         print(f"User ({speaker.value}): {transcription}")
@@ -319,7 +368,9 @@ class JarvisAgent:
                 break
             except Exception as e:
                 print(f"[JARVIS] Turn error: {e}")
+                self.state_machine.set_state(VoiceState.LISTENING)
                 time.sleep(1)
+
 
     def run_text_interactive(self):
         """Interactive text mode for development and testing."""
