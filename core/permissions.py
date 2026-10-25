@@ -26,32 +26,16 @@ class PermissionManager:
         risk_level: RiskLevel,
     ) -> Tuple[bool, str]:
         """
-        Determines if a speaker is authorized to execute an action.
+        Determines if a speaker is authorized to execute an action via the Central Security Gate.
 
         Returns:
             (is_allowed, explanation_message)
         """
-        # OWNER can perform actions up to their confirmation limits
-        if speaker == SpeakerClassification.OWNER:
-            return True, "Owner authorized"
+        from security.authorization_gate import authorize_action
+        allowed, msg, _ = authorize_action(
+            speaker=speaker,
+            action_name=action_name,
+            risk_level=risk_level,
+        )
+        return allowed, msg
 
-        # UNCERTAIN speaker must re-authenticate for anything above Informational
-        if speaker == SpeakerClassification.UNCERTAIN:
-            if risk_level > RiskLevel.LEVEL_0_INFORMATIONAL:
-                return (
-                    False,
-                    "Speaker verification was uncertain. Please speak again to verify your identity as Sanjay."
-                )
-            return True, "Harmless query permitted for uncertain speaker"
-
-        # UNKNOWN speaker
-        if speaker == SpeakerClassification.UNKNOWN:
-            act_lower = action_name.lower()
-            if any(forbidden in act_lower for forbidden in self.FORBIDDEN_UNKNOWN_OPERATIONS) or risk_level > RiskLevel.LEVEL_0_INFORMATIONAL:
-                return (
-                    False,
-                    "Access denied. Privileged computer controls and private data are restricted to the owner (Sanjay)."
-                )
-            return True, "Informational dialogue allowed for guest"
-
-        return False, "Unknown permission state"

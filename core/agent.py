@@ -38,6 +38,7 @@ from voice.wake_word import WakeWordDetector
 from voice.speaker_verification import SpeakerVerifier
 from voice.state_machine import VoiceState, VoiceStateMachine
 from voice.barge_in import BargeInDetector
+from voice.voice_engine import get_voice_engine, VoiceEngine
 from memory.conversation_memory import ConversationMemory
 from memory.preferences import PreferencesManager
 from security.privacy_guard import PrivacyGuard
@@ -76,11 +77,12 @@ class JarvisAgent:
 
         # Voice Subsystems (Single Consistent Voice Identity) & State Machine
         self.state_machine = VoiceStateMachine(initial_state=VoiceState.IDLE)
-        self.recorder = AudioRecorder(settings=self.settings)
-        self.stt = SpeechToText(settings=self.settings)
-        self.tts = TextToSpeech(settings=self.settings)
         self.verifier = SpeakerVerifier()
-        self.barge_in = BargeInDetector(
+        self.voice_engine: VoiceEngine = get_voice_engine(settings=self.settings, state_machine=self.state_machine)
+        self.recorder = getattr(self.voice_engine, "recorder", None) or getattr(getattr(self.voice_engine, "_fallback_engine", None), "recorder", None) or AudioRecorder(settings=self.settings)
+        self.stt = getattr(self.voice_engine, "stt", None) or getattr(getattr(self.voice_engine, "_fallback_engine", None), "stt", None) or SpeechToText(settings=self.settings)
+        self.tts = getattr(self.voice_engine, "tts", None) or getattr(getattr(self.voice_engine, "_fallback_engine", None), "tts", None) or TextToSpeech(settings=self.settings)
+        self.barge_in = getattr(self.voice_engine, "barge_in", None) or getattr(getattr(self.voice_engine, "_fallback_engine", None), "barge_in", None) or BargeInDetector(
             settings=self.settings,
             stt=self.stt,
             verifier=self.verifier,
@@ -132,6 +134,17 @@ class JarvisAgent:
             multi_step_executor=self.executor.multi_step_executor,
         )
 
+        # Phase 3 Verified Agent Loop (Goal -> Plan -> Authorize -> Execute -> Observe -> Verify -> Report)
+        from core.agent_loop import Phase3AgentLoop
+        self.agent_loop = Phase3AgentLoop(
+            llm_provider=self.provider,
+            file_mgr=self.executor.file_mgr,
+            app_indexer=self.executor.app_ctrl.indexer,
+            browser_ctrl=self.executor.browser_ctrl,
+            win_ctrl=self.executor.win_ctrl,
+            sys_monitor=self.executor.sys_monitor,
+        )
+
         self._running = False
         self._current_speaker = SpeakerClassification(self.settings.default_permission_level)
 
@@ -148,25 +161,48 @@ class JarvisAgent:
         print(f"\n[JARVIS] Wake word detected. Online for {title}.")
         self.speak_response(f"Yes, {title}?")
 
-    def emergency_stop(self):
+    def emergency_stop(self, speaker: Optional[SpeakerClassification] = None) -> str:
         """Global emergency stop phrase 'Jarvis stop' immediately halts active automation."""
+        active_speaker = speaker or self._current_speaker
+        if hasattr(self, "agent_loop") and self.agent_loop:
+            self.agent_loop.request_stop()
         self.state_machine.set_state(VoiceState.INTERRUPTED)
-        self.tts.stop()
+        self.voice_engine.stop_speaking()
         self.recorder.interrupt()
         self.task_manager.request_emergency_stop()
         self.confirmation_mgr.cancel_pending()
         print("[JARVIS] Emergency stop executed. All active automation halted.")
         self.state_machine.set_state(VoiceState.LISTENING)
+        if active_speaker == SpeakerClassification.OWNER:
+            return f"Stopped immediately, {self.preferences.get('preferred_title', 'Sir')}."
+        return "Stopped immediately."
 
-
-    def build_system_prompt(self) -> str:
-        """Constructs persona system prompt tailored to Sanjay."""
+    def build_system_prompt(self, speaker: Optional[SpeakerClassification] = None) -> str:
+        """Constructs persona system prompt tailored to speaker identity."""
+        active_speaker = speaker or self._current_speaker
         owner = self.preferences.get("owner_name", "Sanjay")
         title = self.preferences.get("preferred_title", "Sir")
 
+        if active_speaker == SpeakerClassification.OWNER:
+            identity_rule = (
+                f"The verified speaker is the owner.\n"
+                f"CRITICAL NAMING RULE: Always address the owner ONLY as '{title}'.\n"
+                f"NEVER address the owner as '{owner}'. Do NOT say 'Hello, {owner}' or 'Yes, {owner}'.\n"
+                f"The owner's real name is {owner}, but you must speak the name '{owner}' ONLY when the user explicitly asks about their identity (e.g. 'What is my name?' -> 'Your name is {owner}, {title}.' or 'Who is your owner?' -> 'My owner is {owner}, {title}.').\n"
+                f"Under all other circumstances, address the owner strictly as '{title}'."
+            )
+        else:
+            identity_rule = (
+                "The current speaker is an UNKNOWN / GUEST speaker (NOT Sanjay).\n"
+                "Do NOT address them as Sanjay or Sir.\n"
+                "Use neutral, polite phrasing like 'Hello'.\n"
+                "Do NOT disclose passwords, API keys, private documents, or project data.\n"
+                "Do NOT execute file deletion, system configuration changes, or shell/PowerShell commands."
+            )
+
         prompt = (
             f"You are JARVIS, an autonomous personal Windows desktop AI assistant and computer-use agent created for {owner}.\n"
-            f"Always address the user naturally as '{owner}' or '{title}'.\n"
+            f"{identity_rule}\n"
             "Key personality and behavioral rules:\n"
             "- Friendly, calm, respectful, intelligent, articulate personal assistant.\n"
             "- Speak naturally and conversationally, like a real AI assistant, never mechanical or robotic.\n"
@@ -178,6 +214,21 @@ class JarvisAgent:
             "- Never expose or speak passwords, API keys, or private credentials aloud.\n"
         )
         return prompt
+
+    def _is_agent_loop_goal(self, text: str) -> bool:
+        """Determines if a command should be orchestrated via Phase 3 Agent Loop."""
+        t_low = text.lower()
+        if any(marker in t_low for marker in [" and inside ", " and create ", " and run ", " then ", " and write ", " inside it ", " in it "]):
+            return True
+        if "folder" in t_low and any(w in t_low for w in ["create", "make", "delete", "remove"]):
+            return True
+        if "file" in t_low and any(w in t_low for w in ["create", "write", "delete", "rename"]):
+            return True
+        if any(ext in t_low for ext in [".py", ".txt", ".js", ".json", ".html", ".md"]) and any(w in t_low for w in ["create", "write", "run", "make"]):
+            return True
+        if any(p in t_low for p in ["run python", "execute python", "run it"]):
+            return True
+        return False
 
     def process_input(
         self,
@@ -193,9 +244,9 @@ class JarvisAgent:
             return ""
 
         # Step 0: Emergency Stop Check
-        if clean_input.lower() in ["jarvis stop", "stop", "abort", "cancel"]:
-            self.emergency_stop()
-            return f"Stopped immediately, {self.preferences.get('preferred_title', 'Sir')}."
+        stop_phrases = ["jarvis stop", "stop", "abort", "cancel", "cancel task", "stop this", "wait"]
+        if clean_input.lower() in stop_phrases or any(clean_input.lower().startswith(p) for p in ["jarvis stop", "cancel task", "stop this"]):
+            return self.emergency_stop(active_speaker)
 
         # Step 1: Check Pending High-Risk Confirmation
         if self.confirmation_mgr.has_pending_confirmation:
@@ -255,12 +306,28 @@ class JarvisAgent:
 
         # Step 4: Autonomous Goal-Oriented Computer & Tool Planning
         self.state_machine.set_state(VoiceState.EXECUTING)
-        system_prompt = self.build_system_prompt()
-        success, final_response = self.planner.execute_goal(
-            goal=clean_input,
-            speaker=active_speaker,
-            system_prompt=system_prompt,
-        )
+
+        # Fail-closed security check for UNKNOWN speakers attempting computer tasks
+        if active_speaker != SpeakerClassification.OWNER:
+            fail_resp = "I don't recognize this voice. Computer controls are locked."
+            self.memory.add_user_message(clean_input)
+            self.memory.add_assistant_message(fail_resp)
+            return fail_resp
+
+        # Route complex / multi-step or file/code tasks to Phase 3 Agent Loop
+        if self._is_agent_loop_goal(clean_input):
+            success, final_response = self.agent_loop.run_goal(
+                goal=clean_input,
+                speaker=active_speaker,
+                confirmed=False,
+            )
+        else:
+            system_prompt = self.build_system_prompt(active_speaker)
+            success, final_response = self.planner.execute_goal(
+                goal=clean_input,
+                speaker=active_speaker,
+                system_prompt=system_prompt,
+            )
 
         # Update Conversation Memory
         self.memory.add_user_message(clean_input)
@@ -291,34 +358,7 @@ class JarvisAgent:
         # Use single unified multilingual voice identity
         voice = self.multilingual.get_preferred_voice_for_language("multilingual")
 
-        # State transition to SPEAKING
-        self.state_machine.set_state(VoiceState.SPEAKING)
-
-        # Start playback asynchronously on dedicated worker thread
-        playback_thread = self.tts.speak_async(safe_text, voice=voice)
-
-        # Run concurrent barge-in monitoring while TTS is speaking
-        if getattr(self.settings, "barge_in_enabled", True):
-            detected_phrase = self.barge_in.listen_for_interruption(
-                self.tts,
-                current_speaking_text=safe_text,
-            )
-            if detected_phrase:
-                print(f'[BARGE-IN] Detected: "{detected_phrase}"')
-                self.state_machine.set_state(VoiceState.INTERRUPTED)
-                self.tts.stop()
-                if playback_thread and playback_thread.is_alive():
-                    playback_thread.join(timeout=1.0)
-                # Immediately return to LISTENING
-                self.state_machine.set_state(VoiceState.LISTENING)
-                return False
-
-        if playback_thread and playback_thread.is_alive():
-            playback_thread.join(timeout=60.0)
-
-        # Automatically return to LISTENING after completed response
-        self.state_machine.set_state(VoiceState.LISTENING)
-        return True
+        return self.voice_engine.speak(safe_text, voice=voice)
 
     def run_turn(self) -> Optional[str]:
         """
@@ -327,19 +367,22 @@ class JarvisAgent:
         """
         self.state_machine.set_state(VoiceState.LISTENING)
         print("\n[JARVIS] Listening...")
-        audio_data = self.recorder.record_phrase()
-        if not audio_data:
+        listen_result = self.voice_engine.listen()
+        if not listen_result:
             return None
+        audio_data, transcription = listen_result
 
         # State transition to PROCESSING
         self.state_machine.set_state(VoiceState.PROCESSING)
 
         # Speaker Verification
         speaker, confidence = self.verifier.verify_speaker(audio_data)
-        print(f"[JARVIS] Speaker Verified: {speaker.value} (Confidence: {confidence:.2f})")
+        self._current_speaker = speaker
+        if speaker == SpeakerClassification.OWNER:
+            print(f"[JARVIS] Speaker Verified: OWNER (Confidence: {confidence:.2f})")
+        else:
+            print(f"[JARVIS] Speaker Verification: UNKNOWN / GUEST (Confidence: {confidence:.2f})")
 
-        # Transcribe
-        transcription = self.stt.transcribe(audio_data)
         if not transcription:
             self.state_machine.set_state(VoiceState.LISTENING)
             return None
@@ -354,6 +397,7 @@ class JarvisAgent:
     def run_continuous_voice(self):
         """Continuous voice loop."""
         self._running = True
+        self.voice_engine.start()
         print(f"\n[JARVIS] Voice mode active. Provider: {self.provider.name}")
         title = self.preferences.get("preferred_title", "Sir")
         greeting = f"JARVIS online and fully operational. At your service, {title}."
@@ -370,6 +414,8 @@ class JarvisAgent:
                 print(f"[JARVIS] Turn error: {e}")
                 self.state_machine.set_state(VoiceState.LISTENING)
                 time.sleep(1)
+
+        self.voice_engine.stop()
 
 
     def run_text_interactive(self):

@@ -30,6 +30,7 @@ class AudioRecorder:
 
         self.energy_threshold = self.settings.energy_threshold
         self.dynamic_threshold = self.settings.dynamic_energy_threshold
+        self.min_speech_ms = getattr(self.settings, "vad_min_speech_ms", 250)
         self.is_recording = False
         self._interrupted = False
 
@@ -43,14 +44,43 @@ class AudioRecorder:
             return 0.0
         return float(np.sqrt(np.mean(np.square(audio_chunk.astype(np.float32)))))
 
-    def calibrate_ambient_noise(self, duration: float = 1.0) -> float:
+    def calculate_zero_crossing_rate(self, audio_chunk: np.ndarray) -> float:
+        """Calculates normalized zero-crossing rate of an audio chunk."""
+        if len(audio_chunk) <= 1:
+            return 0.0
+        signs = np.sign(audio_chunk)
+        signs[signs == 0] = 1
+        crossings = np.sum(np.abs(np.diff(signs))) / 2.0
+        return float(crossings / (len(audio_chunk) - 1))
+
+    def calculate_speech_confidence(self, audio_chunk: np.ndarray) -> Tuple[bool, float]:
         """
-        Samples ambient background noise to dynamically adapt the energy threshold.
+        Evaluates speech confidence using acoustic RMS energy and Zero-Crossing Rate (ZCR).
+        Rejects impulsive clicks, keyboard taps, fan whines, and low-energy room noise.
+        """
+        rms = self.calculate_rms(audio_chunk)
+        if rms < self.energy_threshold:
+            return False, 0.0
+
+        zcr = self.calculate_zero_crossing_rate(audio_chunk)
+        # Sharp high-frequency clicks and static hiss exhibit very high ZCR (>0.45)
+        if zcr > 0.45 and rms < self.energy_threshold * 2.0:
+            return False, 0.2
+
+        margin = min(1.0, (rms - self.energy_threshold) / (self.energy_threshold + 1e-6))
+        confidence = float(0.5 + 0.5 * margin)
+        return True, confidence
+
+    def calibrate_ambient_noise(self, duration: Optional[float] = None) -> float:
+        """
+        Samples ambient background noise to dynamically adapt the speech threshold.
+        Measures baseline room noise and sets the speech threshold above the noise floor.
         """
         import sounddevice as sd
 
+        cal_dur = duration if duration is not None else getattr(self.settings, "vad_noise_calibration_seconds", 0.5)
         try:
-            samples_to_read = int(self.sample_rate * duration)
+            samples_to_read = int(self.sample_rate * cal_dur)
             recording = sd.rec(
                 samples_to_read,
                 samplerate=self.sample_rate,
@@ -59,11 +89,16 @@ class AudioRecorder:
             )
             sd.wait()
             rms = self.calculate_rms(recording)
-            if self.dynamic_threshold and rms > 0:
-                self.energy_threshold = max(int(rms * 1.5), 250)
+            baseline = max(rms, 80.0)
+            if self.dynamic_threshold:
+                # Set speech threshold above ambient noise floor
+                configured_floor = getattr(self.settings, "vad_speech_threshold", 400)
+                self.energy_threshold = max(int(baseline * 2.2), configured_floor)
+                print(f"[VAD] Ambient noise calibrated: baseline_rms={baseline:.1f}, speech_threshold={self.energy_threshold}")
             return rms
         except Exception as e:
-            print(f"[Recorder] Noise calibration notice: {e}")
+            fallback = getattr(self.settings, "vad_speech_threshold", 400)
+            self.energy_threshold = fallback
             return float(self.energy_threshold)
 
     def record_phrase(
@@ -73,8 +108,9 @@ class AudioRecorder:
         silence_duration: Optional[float] = None,
     ) -> Optional[bytes]:
         """
-        Listens until speech is detected, then dynamically records while speech continues,
-        tolerating natural pauses, and ending upon sustained silence.
+        Listens until sustained speech is detected (multi-frame confirmation),
+        then dynamically records while speech continues, tolerating natural pauses,
+        and ending upon sustained silence.
 
         Args:
             timeout: Max seconds to wait for initial speech to begin.
@@ -90,7 +126,12 @@ class AudioRecorder:
         # Resolve configurable thresholds from settings
         wait_timeout = timeout if timeout is not None else getattr(self.settings, "stt_timeout_seconds", 10.0)
         safety_limit = phrase_time_limit if phrase_time_limit is not None else getattr(self.settings, "max_record_seconds", 60.0)
-        silence_thresh = silence_duration if silence_duration is not None else getattr(self.settings, "silence_threshold_seconds", 1.6)
+        silence_thresh = silence_duration if silence_duration is not None else getattr(self.settings, "silence_threshold_seconds", 1.5)
+        min_speech_ms = getattr(self.settings, "vad_min_speech_ms", 250)
+
+        chunk_duration = self.chunk_size / self.sample_rate
+        chunk_duration_ms = chunk_duration * 1000.0
+        consecutive_required = max(2, int(min_speech_ms / chunk_duration_ms))
 
         self._interrupted = False
         self.is_recording = True
@@ -98,6 +139,9 @@ class AudioRecorder:
         frames = []
         speech_started = False
         silence_active = False
+        candidate_frames = []
+        last_noise_log_time = 0.0
+
         start_time = time.time()
         phrase_start_time = None
         last_speech_time = None
@@ -105,7 +149,6 @@ class AudioRecorder:
         end_time = None
 
         # Pre-speech rolling buffer: ~400ms of audio before speech threshold
-        chunk_duration = self.chunk_size / self.sample_rate
         pre_buffer_chunks = max(int(0.4 / chunk_duration), 6)
         pre_buffer = deque(maxlen=pre_buffer_chunks)
 
@@ -128,28 +171,44 @@ class AudioRecorder:
                     data, _ = stream.read(self.chunk_size)
                     chunk = data.flatten()
                     rms = self.calculate_rms(chunk)
+                    is_speech, conf = self.calculate_speech_confidence(chunk)
 
                     if not speech_started:
                         pre_buffer.append(chunk)
-                        # Waiting for initial user speech
-                        if rms > self.energy_threshold:
-                            speech_started = True
-                            phrase_start_time = now
-                            last_speech_time = now
-                            last_continuing_log_time = now
-                            silence_active = False
-                            self.last_latency_stats["vad_wait_seconds"] = round(now - start_time, 3)
-                            # Prepend pre-speech buffer so initial syllables are never clipped
-                            frames.extend(list(pre_buffer))
-                            print("[VAD] Speech started")
-                        elif (now - start_time) > wait_timeout:
-                            # Timed out waiting for speech to begin
-                            break
+
+                        if is_speech:
+                            candidate_frames.append(chunk)
+                            if len(candidate_frames) == 1:
+                                print("[VAD] Speech candidate detected")
+                            if len(candidate_frames) >= consecutive_required:
+                                speech_started = True
+                                phrase_start_time = now
+                                last_speech_time = now
+                                last_continuing_log_time = now
+                                silence_active = False
+                                self.last_latency_stats["vad_wait_seconds"] = round(now - start_time, 3)
+                                # Prepend pre-speech buffer and candidate frames so syllables are never clipped
+                                frames.extend(list(pre_buffer))
+                                frames.extend(candidate_frames)
+                                print("[VAD] Speech confirmed")
+                                print("[VAD] Speech started")
+                                print("[TURN] User turn started")
+                        else:
+                            if candidate_frames:
+                                print("[VAD] Ignored background noise")
+                                candidate_frames.clear()
+                            else:
+                                if rms < self.energy_threshold and (now - last_noise_log_time) >= 3.0:
+                                    print("[VAD] Energy below speech threshold")
+                                    last_noise_log_time = now
+
+                            if (now - start_time) > wait_timeout:
+                                break
                     else:
                         # Recording active speech utterance
                         frames.append(chunk)
 
-                        if rms >= self.energy_threshold:
+                        if is_speech or rms >= self.energy_threshold:
                             last_speech_time = now
                             if silence_active:
                                 silence_active = False
@@ -170,6 +229,7 @@ class AudioRecorder:
                                 if silence_elapsed >= silence_thresh:
                                     # Sustained continuous silence reached threshold
                                     print("[VAD] End of utterance")
+                                    print("[TURN] User turn ended")
                                     end_time = now
                                     break
 

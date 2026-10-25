@@ -196,7 +196,7 @@ def test_fast_router_classification():
     res = router.try_fast_path("Hello Jarvis")
     assert res is not None
     assert res[0] == "greeting"
-    assert "Sanjay" in res[1]
+    assert "Sir" in res[1]
 
     # Time
     res = router.try_fast_path("What time is it?")

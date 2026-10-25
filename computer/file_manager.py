@@ -47,6 +47,20 @@ class FileManager:
         except Exception as e:
             return False, f"Error creating file: {e}"
 
+    def write_file(self, file_path: str, content: str = "", append: bool = False) -> Tuple[bool, str]:
+        """Writes or appends content to a file with verification."""
+        target = self._resolve_path(file_path)
+        try:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            mode = "a" if append else "w"
+            with open(target, mode, encoding="utf-8") as f:
+                f.write(content)
+            if os.path.isfile(target):
+                return True, f"Wrote content to {target}"
+            return False, f"File write verification failed at {target}"
+        except Exception as e:
+            return False, f"Error writing to file {target}: {e}"
+
     def read_file(self, file_path: str, max_chars: int = 4000) -> Tuple[bool, str]:
         """Reads contents of a file safely."""
         target = self._resolve_path(file_path)

@@ -10,6 +10,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 from config.settings import Settings
+from config.constants import SpeakerClassification
 from voice.state_machine import VoiceState, VoiceStateMachine
 from voice.barge_in import BargeInDetector, normalize_text, INTERRUPTION_PHRASES
 from voice.recorder import AudioRecorder
@@ -316,15 +317,16 @@ def test_agent_voice_turn_flow():
     wav_bytes = agent.recorder._create_wav_bytes(audio_pcm)
 
     with patch.object(agent.recorder, "record_phrase", return_value=wav_bytes):
-        with patch.object(agent.stt, "transcribe", return_value="hello jarvis"):
-            with patch.object(agent.tts, "speak_async") as mock_speak_async:
-                mock_thread = threading.Thread(target=lambda: None)
-                mock_thread.start()
-                mock_speak_async.return_value = mock_thread
+        with patch.object(agent.verifier, "verify_speaker", return_value=(SpeakerClassification.OWNER, 0.95)):
+            with patch.object(agent.stt, "transcribe", return_value="hello jarvis"):
+                with patch.object(agent.tts, "speak_async") as mock_speak_async:
+                    mock_thread = threading.Thread(target=lambda: None)
+                    mock_thread.start()
+                    mock_speak_async.return_value = mock_thread
 
-                response = agent.run_turn()
-                assert response is not None
-                assert "Sanjay" in response or "Sir" in response
+                    response = agent.run_turn()
+                    assert response is not None
+                    assert "Sanjay" in response or "Sir" in response
                 # State must return to LISTENING
                 assert agent.state_machine.state == VoiceState.LISTENING
 

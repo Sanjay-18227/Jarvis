@@ -54,7 +54,7 @@ class VoiceStateMachine:
             old_state = self._state
             self._state = new_state
             listeners_to_call = list(self._listeners)
-            print(f"[VOICE] State: {new_state.value}")
+            print(f"[VOICE] State={new_state.value}")
 
         for callback in listeners_to_call:
             try:

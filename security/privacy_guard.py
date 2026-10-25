@@ -27,11 +27,12 @@ class PrivacyGuard:
 
     # Sensitive intent keywords
     SENSITIVE_KEYWORDS = {
-        "CREDENTIALS": ["password", "api key", "secret", "token", "private key", "credential"],
-        "PRIVATE_FILES": ["bank statement", "tax return", "passport", "private photo", "id card"],
+        "CREDENTIALS": ["password", "api key", "secret", "token", "private key", "credential", "saved credentials"],
+        "PRIVATE_FILES": ["bank statement", "tax return", "passport", "private photo", "id card", "my files", "personal data", "private folder", "project data", "private project", "my private"],
         "FINANCIAL": ["pay", "purchase", "transfer money", "credit card", "bank account", "buy"],
-        "DELETION": ["delete", "remove folder", "wipe", "format disk", "destroy"],
-        "SYSTEM_CHANGE": ["registry", "format", "shutdown", "reboot", "powershell -c", "drop table"],
+        "DELETION": ["delete", "remove folder", "wipe", "format disk", "destroy", "delete this file", "delete all files", "remove this file"],
+        "SYSTEM_CHANGE": ["registry", "format", "shutdown", "reboot", "powershell", "cmd", "terminal", "install", "uninstall", "system settings", "change settings", "shell", "run command", "run a powershell"],
+        "FILE_MODIFICATION": ["modify file", "edit file", "send file", "upload", "write to file"],
     }
 
     def redact_secrets(self, text: str) -> str:
@@ -79,8 +80,8 @@ class PrivacyGuard:
         is_sensitive, categories = self.assess_privacy_risk(query)
 
         if speaker == SpeakerClassification.UNKNOWN:
-            if is_sensitive or any(cat in ["CREDENTIALS", "PRIVATE_FILES", "SYSTEM_CHANGE", "DELETION"] for cat in categories):
-                return False, "I cannot access or disclose the owner's private information or execute system commands for an unverified speaker."
+            if is_sensitive:
+                return False, "Access denied. I cannot access or disclose the owner's private information, system settings, or execute commands for an unverified speaker."
 
         if speaker == SpeakerClassification.UNCERTAIN:
             if is_sensitive:

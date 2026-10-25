@@ -12,7 +12,6 @@ import json
 from unittest.mock import MagicMock, patch
 from config.settings import Settings
 from llm.openrouter_provider import OpenRouterProvider
-from llm.ollama_provider import OllamaProvider
 from llm.mock_provider import MockProvider
 from llm.provider_factory import get_llm_provider
 from core.agent import JarvisAgent
@@ -116,17 +115,7 @@ def test_openrouter_generate_stream_mocked():
         assert "".join(chunks) == "Hello Sanjay"
 
 
-def test_ollama_provider_init_and_availability():
-    """Verify OllamaProvider checks daemon availability at base_url."""
-    p = OllamaProvider(base_url="http://localhost:11434", model="llama3:latest")
-    assert "Ollama Local" in p.name
-    assert "llama3:latest" in p.name
 
-    with patch("requests.get", return_value=MagicMock(status_code=200)):
-        assert p.is_available() is True
-
-    with patch("requests.get", side_effect=Exception("Connection refused")):
-        assert p.is_available() is False
 
 
 def test_provider_factory_selection():

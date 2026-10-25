@@ -48,47 +48,81 @@ class SpeakerVerifier:
     """
 
     def __init__(self, profile_path: Optional[str] = None):
+        base_dir = get_settings().base_dir
+        self.dat_path = os.path.join(base_dir, "data", "speaker_profiles", "owner_profile.dat")
+        self.json_path = os.path.join(base_dir, "memory", "owner_voice_profile.json")
+
         if profile_path:
             self.profile_path = profile_path
+        elif os.path.exists(self.dat_path):
+            self.profile_path = self.dat_path
+        elif os.path.exists(self.json_path):
+            self.profile_path = self.json_path
         else:
-            base_dir = get_settings().base_dir
-            self.profile_path = os.path.join(base_dir, "memory", "owner_voice_profile.json")
+            self.profile_path = self.dat_path
 
         self.owner_embedding: Optional[np.ndarray] = None
         self.owner_name = "Sanjay"
-        self.similarity_threshold_owner = 0.82
-        self.similarity_threshold_uncertain = 0.70
+        settings = get_settings()
+        self.similarity_threshold_owner = getattr(settings, "owner_similarity_threshold", 0.78)
+        self.similarity_threshold_uncertain = getattr(settings, "uncertain_similarity_threshold", 0.70)
         self._mel_filters = _mel_filterbank(26, 512, 16000)
 
         self.load_profile()
 
     def load_profile(self) -> bool:
-        """Loads enrolled owner voice embedding from disk."""
-        if os.path.exists(self.profile_path):
+        """Loads enrolled owner voice embedding from disk with fail-closed validation."""
+        paths_to_try = [self.profile_path, self.dat_path, self.json_path]
+        for p in paths_to_try:
+            if not p or not os.path.exists(p):
+                continue
             try:
-                with open(self.profile_path, "r", encoding="utf-8") as f:
+                with open(p, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self.owner_name = data.get("owner_name", "Sanjay")
                     raw_emb = data.get("embedding", [])
-                    if raw_emb:
-                        self.owner_embedding = np.array(raw_emb, dtype=np.float32)
-                        return len(self.owner_embedding) > 0
+                    if raw_emb and len(raw_emb) == 42:
+                        arr = np.array(raw_emb, dtype=np.float32)
+                        # Reject corrupt embeddings (NaN, Inf, or zero-norm)
+                        if np.any(np.isnan(arr)) or np.any(np.isinf(arr)):
+                            continue
+                        norm = np.linalg.norm(arr)
+                        if norm <= 1e-4:
+                            continue
+                        self.owner_embedding = arr
+                        self.profile_path = p
+                        print(f"[SpeakerVerifier] Loaded owner profile from {p}")
+                        return True
             except Exception as e:
-                print(f"[SpeakerVerifier] Error loading voice profile: {e}")
+                print(f"[SpeakerVerifier] Error loading voice profile from {p}: {e}")
+        self.owner_embedding = None
         return False
 
-    def save_profile(self, embedding: np.ndarray, owner_name: str = "Sanjay"):
-        """Saves enrolled owner voice profile."""
-        os.makedirs(os.path.dirname(self.profile_path), exist_ok=True)
+    def save_profile(self, embedding: np.ndarray, owner_name: str = "Sanjay", sample_count: int = 1):
+        """Saves enrolled owner voice profile to both dat and json locations."""
+        import time
         self.owner_embedding = embedding
         self.owner_name = owner_name
         data = {
             "owner_name": owner_name,
             "embedding": embedding.tolist(),
             "dim": len(embedding),
+            "calibrated_threshold": self.similarity_threshold_owner,
+            "sample_count": sample_count,
+            "updated_at": time.time(),
         }
-        with open(self.profile_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+
+        # Save to primary dat and fallback json
+        for path in set([self.profile_path, self.dat_path, self.json_path]):
+            if not path:
+                continue
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+            except Exception as e:
+                print(f"[SpeakerVerifier] Error writing profile to {path}: {e}")
+
         print(f"[SpeakerVerifier] Owner voice profile saved for {owner_name}.")
 
     def extract_embedding(self, audio_data: bytes) -> Optional[np.ndarray]:
@@ -175,18 +209,19 @@ class SpeakerVerifier:
         Returns:
             (classification: OWNER | UNKNOWN | UNCERTAIN, confidence_score: 0.0 - 1.0)
         """
+        print("[SPEAKER] Verification started")
         if self.owner_embedding is None or len(self.owner_embedding) == 0:
-            print("[SPEAKER] similarity=0.00")
-            print("[SPEAKER] result=UNKNOWN")
-            return SpeakerClassification.UNKNOWN, 0.0
-
-        sample_embedding = self.extract_embedding(audio_data)
-        if sample_embedding is None:
-            print("[SPEAKER] similarity=0.00")
-            print("[SPEAKER] result=UNKNOWN")
+            print("[SPEAKER] Similarity: 0.00")
+            print("[SPEAKER] Result: UNKNOWN")
             return SpeakerClassification.UNKNOWN, 0.0
 
         try:
+            sample_embedding = self.extract_embedding(audio_data)
+            if sample_embedding is None:
+                print("[SPEAKER] Similarity: 0.00")
+                print("[SPEAKER] Result: UNKNOWN")
+                return SpeakerClassification.UNKNOWN, 0.0
+
             # Cosine similarity: 1 - cosine_distance
             dist = cosine(self.owner_embedding, sample_embedding)
             similarity = float(1.0 - dist)
@@ -199,12 +234,12 @@ class SpeakerVerifier:
             else:
                 result = SpeakerClassification.UNKNOWN
 
-            print(f"[SPEAKER] similarity={confidence:.2f}")
-            print(f"[SPEAKER] result={result.value}")
+            print(f"[SPEAKER] Similarity: {confidence:.2f}")
+            print(f"[SPEAKER] Result: {result.value}")
             return result, confidence
 
         except Exception as e:
             print(f"[SpeakerVerifier] Verification error: {e}")
-            print("[SPEAKER] similarity=0.00")
-            print("[SPEAKER] result=UNKNOWN")
+            print("[SPEAKER] Similarity: 0.00")
+            print("[SPEAKER] Result: UNKNOWN")
             return SpeakerClassification.UNKNOWN, 0.0

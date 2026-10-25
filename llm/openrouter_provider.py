@@ -120,6 +120,7 @@ class OpenRouterProvider(AIProvider):
         system_prompt: Optional[str] = None,
         history: Optional[List[Dict[str, str]]] = None,
         screen_context: Optional[str] = None,
+        max_tokens: int = 800,
     ) -> Dict[str, Any]:
         """
         Executes autonomous goal reasoning with tools via OpenRouter function calling.
@@ -152,6 +153,7 @@ class OpenRouterProvider(AIProvider):
             "model": self.model,
             "messages": messages,
             "temperature": 0.2,
+            "max_tokens": max_tokens,
         }
         if openai_tools:
             payload["tools"] = openai_tools

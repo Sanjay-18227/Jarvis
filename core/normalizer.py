@@ -32,6 +32,8 @@ class IntentType:
     MEDIA_CONTROL = "MEDIA_CONTROL"
     LOCK_SCREEN = "LOCK_SCREEN"
     GENERAL_AI = "GENERAL_AI"
+    NAME_QUERY = "NAME_QUERY"
+    OWNER_QUERY = "OWNER_QUERY"
 
 
 class Normalizer:
@@ -151,6 +153,23 @@ class Normalizer:
         if t in ["hello", "hi", "hey", "good morning", "good evening", "good afternoon", "vanakkam", "வணக்கம்"]:
             return IntentType.GREETING, {}
 
+        # 2.5 Name & Owner Queries (Part 1 & Test 10)
+        # e.g. "What is my name?", "Who is your owner?"
+        lower_q = raw_clean.lower()
+        if any(nq in t or nq in lower_q for nq in [
+            "what is my name", "whats my name", "what's my name",
+            "tell me my name", "do you know my name", "who am i",
+            "my name"
+        ]):
+            return IntentType.NAME_QUERY, {}
+
+        if any(oq in t or oq in lower_q for oq in [
+            "who is your owner", "who's your owner", "who is the owner",
+            "who owns you", "who created you", "who do you belong to"
+        ]):
+            return IntentType.OWNER_QUERY, {}
+
+
         # 3. Screen Vision Queries (Requirement G & Test 10)
         raw_lower = raw_text.lower().strip()
         if any(p in t or p in raw_lower for p in [
@@ -262,6 +281,14 @@ class Normalizer:
         if t in cls.APP_ALIASES:
             return IntentType.OPEN_APP, {"app_key": cls.APP_ALIASES[t], "raw_name": t}
 
+        # Check postfix open: e.g. "edge open", "calculator open"
+        if t.endswith(" open"):
+            target = t[:-5].replace("the ", "").replace("application", "").replace("app", "").strip()
+            if target in cls.APP_ALIASES:
+                return IntentType.OPEN_APP, {"app_key": cls.APP_ALIASES[target], "raw_name": target}
+            if target in cls.KNOWN_WEBSITES:
+                return IntentType.OPEN_WEBSITE, {"site_name": target, "url": cls.KNOWN_WEBSITES[target]}
+
         # 10. Battery
         if any(k in t for k in ["battery status", "battery percentage", "what is my battery", "how much battery", "check battery"]):
             return IntentType.BATTERY, {}
@@ -297,18 +324,6 @@ class Normalizer:
         - "Open Notepad, type 'Hi, how are you?', and save it on Desktop as Hello.txt"
         - "Save it on Desktop as Hello.txt"
         """
-        # Standalone save command: "save it on desktop as hello.txt" or "save that text as hello.txt on desktop"
-        save_match = re.search(r"save\s+(?:it|that|this|the\s+file|the\s+text)?\s*(?:on|to|in)?\s*(?:the\s+)?(desktop)?\s*(?:as|named|with\s+name)?\s*([a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+)", clean_t)
-        if save_match:
-            filename = save_match.group(2)
-            location = "desktop" if "desktop" in clean_t else "desktop"
-            return {
-                "action": "save_file",
-                "filename": filename,
-                "location": location,
-                "raw_text": raw_text,
-            }
-
         # Multi-step: "open notepad ... and type ..."
         if ("open notepad" in clean_t or "launch notepad" in clean_t) and ("type " in clean_t or "write " in clean_t):
             # Extract text to type
@@ -332,6 +347,18 @@ class Normalizer:
                 "text": text_to_type,
                 "save_file": save_file,
                 "location": "desktop" if "desktop" in clean_t else None,
+                "raw_text": raw_text,
+            }
+
+        # Standalone save command: "save it on desktop as hello.txt" or "save that text as hello.txt on desktop"
+        save_match = re.search(r"save\s+(?:it|that|this|the\s+file|the\s+text)?\s*(?:on|to|in)?\s*(?:the\s+)?(desktop)?\s*(?:as|named|with\s+name)?\s*([a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+)", clean_t)
+        if save_match:
+            filename = save_match.group(2)
+            location = "desktop" if "desktop" in clean_t else "desktop"
+            return {
+                "action": "save_file",
+                "filename": filename,
+                "location": location,
                 "raw_text": raw_text,
             }
 
