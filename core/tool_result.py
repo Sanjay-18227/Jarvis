@@ -16,9 +16,10 @@ class ToolResult:
     """
     success: bool
     action: str
-    message: str
+    message: str = ""
     evidence: str = ""
     error: Optional[str] = None
+    target: Optional[str] = None
 
     def __iter__(self):
         """Allows unpacking as (success, message) for backward compatibility."""
@@ -35,10 +36,11 @@ class ToolResult:
             "message": self.message,
             "evidence": self.evidence,
             "error": self.error,
+            "target": self.target,
         }
 
     @classmethod
-    def ok(cls, action: str, message: str, evidence: str = "") -> "ToolResult":
+    def ok(cls, action: str, message: str = "", evidence: str = "", target: Optional[str] = None, **kwargs) -> "ToolResult":
         """Creates a verified success result."""
         return cls(
             success=True,
@@ -46,15 +48,19 @@ class ToolResult:
             message=message,
             evidence=evidence,
             error=None,
+            target=target or kwargs.get("target"),
         )
 
     @classmethod
-    def fail(cls, action: str, message: str, error: str = "", evidence: str = "") -> "ToolResult":
+    def fail(cls, action: str, message: str = "", error: str = "", evidence: str = "", target: Optional[str] = None, **kwargs) -> "ToolResult":
         """Creates a verified failure result."""
+        err = error or message or "Operation failed"
+        msg = message or err
         return cls(
             success=False,
             action=action,
-            message=message,
+            message=msg,
             evidence=evidence,
-            error=error or message,
+            error=err,
+            target=target or kwargs.get("target"),
         )

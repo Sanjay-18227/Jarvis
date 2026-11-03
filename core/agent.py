@@ -45,7 +45,9 @@ from security.privacy_guard import PrivacyGuard
 from security.secrets_manager import SecretsManager
 from security.audit_log import AuditLogger
 from security.confirmation import ConfirmationManager
+from security.authorization_gate import get_speaker_session
 from core.fast_router import FastRouter
+from core.context_memory import get_context_memory
 
 
 class JarvisAgent:
@@ -143,10 +145,41 @@ class JarvisAgent:
             browser_ctrl=self.executor.browser_ctrl,
             win_ctrl=self.executor.win_ctrl,
             sys_monitor=self.executor.sys_monitor,
+            screen_vision=self.screen_vision.service,
+        )
+
+        # Local Small Language Model (SLM) for local-first understanding & paraphrases
+        from core.local_slm import LocalSLM
+        self.local_slm = LocalSLM(
+            settings=self.settings,
+            skill_registry=self.fast_router.skill_registry,
         )
 
         self._running = False
         self._current_speaker = SpeakerClassification(self.settings.default_permission_level)
+        self.perf_metrics: Dict[str, float] = {
+            "vad_end_ms": 0.0,
+            "stt_ms": 0.0,
+            "speaker_verify_ms": 0.0,
+            "routing_ms": 0.0,
+            "llm_ms": 0.0,
+            "tool_ms": 0.0,
+            "verification_ms": 0.0,
+            "tts_start_ms": 0.0,
+            "total_response_ms": 0.0,
+        }
+
+    def log_perf_metrics(self):
+        """Logs performance timing metrics conforming to benchmark instrumentation."""
+        print(f"[PERF] vad_end_ms={self.perf_metrics.get('vad_end_ms', 0.0):.1f}")
+        print(f"[PERF] stt_ms={self.perf_metrics.get('stt_ms', 0.0):.1f}")
+        print(f"[PERF] speaker_verify_ms={self.perf_metrics.get('speaker_verify_ms', 0.0):.1f}")
+        print(f"[PERF] routing_ms={self.perf_metrics.get('routing_ms', 0.0):.1f}")
+        print(f"[PERF] llm_ms={self.perf_metrics.get('llm_ms', 0.0):.1f}")
+        print(f"[PERF] tool_ms={self.perf_metrics.get('tool_ms', 0.0):.1f}")
+        print(f"[PERF] verification_ms={self.perf_metrics.get('verification_ms', 0.0):.1f}")
+        print(f"[PERF] tts_start_ms={self.perf_metrics.get('tts_start_ms', 0.0):.1f}")
+        print(f"[PERF] total_response_ms={self.perf_metrics.get('total_response_ms', 0.0):.1f}")
 
     @property
     def speaker_state(self) -> SpeakerClassification:
@@ -279,8 +312,13 @@ class JarvisAgent:
             return refusal_message
 
         # Step 2.5: Fast Path Hybrid Intelligence (Sub-second local OS actions & conversational greetings)
+        t_route_start = time.perf_counter()
         fast_result = self.fast_router.try_fast_path(clean_input, active_speaker)
         if fast_result is not None:
+            self.perf_metrics["routing_ms"] = getattr(self.fast_router, "last_routing_ms", (time.perf_counter() - t_route_start) * 1000.0)
+            self.perf_metrics["tool_ms"] = getattr(self.fast_router, "last_tool_ms", 0.0)
+            self.perf_metrics["verification_ms"] = getattr(self.fast_router, "last_verify_ms", 0.0)
+            self.perf_metrics["llm_ms"] = 0.0
             action_name, fast_resp = fast_result
             if action_name not in ["chat", "greeting"]:
                 self.state_machine.set_state(VoiceState.EXECUTING)
@@ -296,38 +334,120 @@ class JarvisAgent:
             )
             return fast_resp
 
+        # Step 2.7: Active-Context Skill Resolution (When app context dictates command handling)
+        ctx = get_context_memory()
+        active_app = ctx.get_active_app()
+        if active_app:
+            active_skill = self.fast_router.skill_registry.get_skill(active_app.lower())
+            if active_skill and active_skill.can_handle(clean_input, {}, ctx):
+                res = active_skill.execute(clean_input, {}, ctx)
+                if res.success:
+                    self.perf_metrics["routing_ms"] = (time.perf_counter() - t_route_start) * 1000.0
+                    self.perf_metrics["tool_ms"] = 0.0
+                    self.perf_metrics["verification_ms"] = 0.0
+                    self.perf_metrics["llm_ms"] = 0.0
+                    self.state_machine.set_state(VoiceState.EXECUTING)
+                    self.memory.add_user_message(clean_input)
+                    self.memory.add_assistant_message(res.message)
+                    self.audit_logger.log_action(
+                        task=clean_input,
+                        speaker=active_speaker,
+                        action=f"CONTEXT_SKILL_{active_app.upper()}",
+                        risk_level=RiskLevel.LEVEL_0_INFORMATIONAL,
+                        status=ActionStatus.SUCCESS,
+                        details={"response": res.message[:400]},
+                    )
+                    return res.message
+
+        # Step 2.8: Local SLM Layer (Natural-language understanding, paraphrases, entity extraction, local tools)
+        if hasattr(self, "local_slm") and self.local_slm.enabled:
+            slm_result = self.local_slm.try_slm_routing(clean_input, active_speaker, context=ctx)
+            if slm_result is not None:
+                action_name, slm_resp = slm_result
+                self.perf_metrics["routing_ms"] = getattr(self.local_slm, "last_routing_latency_ms", (time.perf_counter() - t_route_start) * 1000.0)
+                self.perf_metrics["tool_ms"] = 0.0
+                self.perf_metrics["verification_ms"] = 0.0
+                self.perf_metrics["llm_ms"] = 0.0
+                if action_name not in ["chat", "greeting", "security_denied"]:
+                    self.state_machine.set_state(VoiceState.EXECUTING)
+                self.memory.add_user_message(clean_input)
+                self.memory.add_assistant_message(slm_resp)
+                self.audit_logger.log_action(
+                    task=clean_input,
+                    speaker=active_speaker,
+                    action=f"SLM_{action_name.upper()}",
+                    risk_level=RiskLevel.LEVEL_0_INFORMATIONAL,
+                    status=ActionStatus.SUCCESS if action_name != "security_denied" else ActionStatus.DENIED,
+                    details={"response": slm_resp[:400]},
+                )
+                return slm_resp
+
         # Step 3: Screen Vision Direct Check
         if any(term in clean_input.lower() for term in ["what is this error", "look at my screen", "look at screen", "what's wrong here", "what is on my screen"]):
+            t_vision_start = time.perf_counter()
+            self.perf_metrics["routing_ms"] = (t_vision_start - t_route_start) * 1000.0
             self.state_machine.set_state(VoiceState.EXECUTING)
             _, vision_resp = self.screen_vision.inspect_screen(clean_input, active_speaker)
+            t_vision_end = time.perf_counter()
+            self.perf_metrics["tool_ms"] = 0.0
+            self.perf_metrics["verification_ms"] = (t_vision_end - t_vision_start) * 1000.0
+            self.perf_metrics["llm_ms"] = 0.0
             self.memory.add_user_message(clean_input)
             self.memory.add_assistant_message(vision_resp)
             return vision_resp
+
+        # Step 3.5: Visual Contextual Follow-up ("Fix it") (Section 19)
+        if clean_input.lower() in ["fix it", "fix this", "fix this error", "resolve it", "fix the error", "fix that"]:
+            ctx = get_context_memory()
+            recent_err = ctx.get_last_observed_error()
+            recent_app = ctx.get_last_observed_error_app()
+            if recent_err:
+                clean_input = f"Fix the error '{recent_err}' in {recent_app or 'current project'}"
+                print(f"[CONTEXT] Resolved 'fix it' to: '{clean_input}'")
+            else:
+                resp = "Sir, I don't have a record of an observed error to fix. Would you like me to inspect your screen first?"
+                self.memory.add_user_message(clean_input)
+                self.memory.add_assistant_message(resp)
+                return resp
 
         # Step 4: Autonomous Goal-Oriented Computer & Tool Planning
         self.state_machine.set_state(VoiceState.EXECUTING)
 
         # Fail-closed security check for UNKNOWN speakers attempting computer tasks
         if active_speaker != SpeakerClassification.OWNER:
+            print(f"[SECURITY] DENIED: Goal execution blocked for speaker={active_speaker.value}")
             fail_resp = "I don't recognize this voice. Computer controls are locked."
             self.memory.add_user_message(clean_input)
             self.memory.add_assistant_message(fail_resp)
             return fail_resp
 
         # Route complex / multi-step or file/code tasks to Phase 3 Agent Loop
-        if self._is_agent_loop_goal(clean_input):
-            success, final_response = self.agent_loop.run_goal(
-                goal=clean_input,
-                speaker=active_speaker,
-                confirmed=False,
-            )
-        else:
-            system_prompt = self.build_system_prompt(active_speaker)
-            success, final_response = self.planner.execute_goal(
-                goal=clean_input,
-                speaker=active_speaker,
-                system_prompt=system_prompt,
-            )
+        t_llm_start = time.perf_counter()
+        self.perf_metrics["routing_ms"] = (t_llm_start - t_route_start) * 1000.0
+        success = False
+        final_response = ""
+        try:
+            if self._is_agent_loop_goal(clean_input):
+                success, final_response = self.agent_loop.run_goal(
+                    goal=clean_input,
+                    speaker=active_speaker,
+                    confirmed=False,
+                )
+            else:
+                system_prompt = self.build_system_prompt(active_speaker)
+                success, final_response = self.planner.execute_goal(
+                    goal=clean_input,
+                    speaker=active_speaker,
+                    system_prompt=system_prompt,
+                )
+        except Exception as e:
+            print(f"[AI] Reasoning provider unavailable: {e}")
+            success = False
+            final_response = "Sir, the cloud reasoning service is currently unavailable, but all local capabilities and computer controls remain fully operational."
+        t_llm_end = time.perf_counter()
+        self.perf_metrics["llm_ms"] = (t_llm_end - t_llm_start) * 1000.0
+        self.perf_metrics["tool_ms"] = 0.0
+        self.perf_metrics["verification_ms"] = 0.0
 
         # Update Conversation Memory
         self.memory.add_user_message(clean_input)
@@ -364,24 +484,73 @@ class JarvisAgent:
         """
         Executes one full voice turn:
         LISTENING -> Speech Detection (VAD) -> End-of-Speech -> PROCESSING -> EXECUTING (if required) -> SPEAKING -> LISTENING.
+        Runs STT and Speaker Verification concurrently on captured audio turn.
+        Instruments and logs timing metrics.
         """
+        import concurrent.futures
+
+        t_turn_start = time.perf_counter()
         self.state_machine.set_state(VoiceState.LISTENING)
         print("\n[JARVIS] Listening...")
-        listen_result = self.voice_engine.listen()
-        if not listen_result:
+
+        t_vad_start = time.perf_counter()
+        audio_data = None
+        if hasattr(self.voice_engine, "record_audio"):
+            audio_data = self.voice_engine.record_audio()
+        if not audio_data:
+            rec_res = self.voice_engine.listen()
+            audio_data = rec_res[0] if rec_res else None
+
+        if not audio_data:
             return None
-        audio_data, transcription = listen_result
+
+        t_vad_end = time.perf_counter()
+        vad_end_ms = (t_vad_end - t_vad_start) * 1000.0
+        self.perf_metrics["vad_end_ms"] = vad_end_ms
 
         # State transition to PROCESSING
         self.state_machine.set_state(VoiceState.PROCESSING)
 
-        # Speaker Verification
-        speaker, confidence = self.verifier.verify_speaker(audio_data)
+        # Run STT and Speaker Verification CONCURRENTLY
+        stt_ms = 0.0
+        speaker_verify_ms = 0.0
+
+        def _do_stt():
+            nonlocal stt_ms
+            t_s = time.perf_counter()
+            res = self.stt.transcribe(audio_data)
+            stt_ms = (time.perf_counter() - t_s) * 1000.0
+            return res
+
+        def _do_verify():
+            nonlocal speaker_verify_ms
+            t_v = time.perf_counter()
+            spk, conf = self.verifier.verify_speaker(audio_data)
+            speaker_verify_ms = (time.perf_counter() - t_v) * 1000.0
+            return spk, conf
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            fut_stt = executor.submit(_do_stt)
+            fut_verify = executor.submit(_do_verify)
+            transcription = fut_stt.result()
+            speaker, confidence = fut_verify.result()
+
+        self.perf_metrics["stt_ms"] = stt_ms
+        self.perf_metrics["speaker_verify_ms"] = speaker_verify_ms
+
+        if transcription:
+            print(f"[STT] Transcript received: {transcription}")
+
+        # Speaker Verification & session gate
         self._current_speaker = speaker
         if speaker == SpeakerClassification.OWNER:
             print(f"[JARVIS] Speaker Verified: OWNER (Confidence: {confidence:.2f})")
+            print("[SECURITY] Owner session authenticated")
+            get_speaker_session().authenticate_owner()
         else:
             print(f"[JARVIS] Speaker Verification: UNKNOWN / GUEST (Confidence: {confidence:.2f})")
+            print("[SECURITY] DENIED: Speaker is not OWNER")
+            get_speaker_session().invalidate("Speaker is not OWNER")
 
         if not transcription:
             self.state_machine.set_state(VoiceState.LISTENING)
@@ -390,6 +559,13 @@ class JarvisAgent:
         print(f"User ({speaker.value}): {transcription}")
         response = self.process_input(transcription, speaker=speaker)
         print(f"JARVIS: {response}")
+
+        t_before_tts = time.perf_counter()
+        self.perf_metrics["tts_start_ms"] = (t_before_tts - t_turn_start) * 1000.0
+        self.perf_metrics["total_response_ms"] = (t_before_tts - t_vad_end) * 1000.0
+
+        # Log performance timing metrics
+        self.log_perf_metrics()
 
         self.speak_response(response)
         return response

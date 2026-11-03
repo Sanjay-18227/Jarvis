@@ -133,9 +133,19 @@ class AutonomousPlanner:
                     self.task_manager.mark_completed(direct_response)
                     return True, direct_response
                 # Conversational fallback to client.generate
-                gen_resp = self.client.generate(goal, system_prompt=system_prompt)
-                self.task_manager.mark_completed(gen_resp)
-                return True, gen_resp
+                try:
+                    gen_resp = self.client.generate(goal, system_prompt=system_prompt)
+                    self.task_manager.mark_completed(gen_resp)
+                    return True, gen_resp
+                except Exception as e:
+                    err_str = str(e).lower()
+                    if "credit" in err_str or "payment" in err_str or "402" in err_str:
+                        print("[OPENROUTER] Request failed: insufficient credits")
+                    else:
+                        print(f"[OPENROUTER] Request failed: {e}")
+                    ctrl_msg = "Sir, the AI planning service is currently unavailable, so I couldn't safely continue this task."
+                    self.task_manager.mark_failed(ctrl_msg)
+                    return False, ctrl_msg
 
             # Execute tool calls sequentially
             for call in tool_calls:
@@ -180,11 +190,18 @@ class AutonomousPlanner:
                     "If errors occurred and need fixing, explain what you will fix. If cannot proceed, explain the blocker honestly."
                 )
 
-                v_resp = self.client.generate(verification_prompt, system_prompt=system_prompt)
-                if "COMPLETED:" in v_resp:
-                    summary = v_resp.split("COMPLETED:", 1)[1].strip()
-                    self.task_manager.mark_completed(summary)
-                    return True, summary
+                try:
+                    v_resp = self.client.generate(verification_prompt, system_prompt=system_prompt)
+                    if "COMPLETED:" in v_resp:
+                        summary = v_resp.split("COMPLETED:", 1)[1].strip()
+                        self.task_manager.mark_completed(summary)
+                        return True, summary
+                except Exception as e:
+                    err_str = str(e).lower()
+                    if "credit" in err_str or "payment" in err_str or "402" in err_str:
+                        print("[OPENROUTER] Request failed: insufficient credits")
+                    else:
+                        print(f"[OPENROUTER] Request failed: {e}")
 
         # Final Summary formulation based on actual verified steps
         final_summary = self._generate_final_summary(goal, accumulated_observations, last_action_success)

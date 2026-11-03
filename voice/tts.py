@@ -67,6 +67,7 @@ class TextToSpeech:
         self._stop_event = threading.Event()
         self._active_thread: Optional[threading.Thread] = None
         self._pyttsx3_engine = None
+        self._playback_announced = False
 
     @property
     def is_speaking(self) -> bool:
@@ -85,8 +86,23 @@ class TextToSpeech:
 
         with self._lock:
             self._is_speaking = False
+            self._playback_announced = False
 
         print("[TTS] Playback stopped")
+
+    def _notify_playback_started(self):
+        """Ensures exactly one '[TTS] Playback started' log per response turn."""
+        with self._lock:
+            if not self._playback_announced:
+                self._playback_announced = True
+                print("[TTS] Playback started")
+
+    def _notify_playback_completed(self):
+        """Ensures exactly one '[TTS] Playback completed' log upon clean completion."""
+        with self._lock:
+            if self._playback_announced and not self._stop_event.is_set():
+                print("[TTS] Playback completed")
+            self._playback_announced = False
 
     def speak_async(self, text: str, voice: Optional[str] = None) -> threading.Thread:
         """
@@ -174,7 +190,7 @@ class TextToSpeech:
 
             with self._lock:
                 self._is_speaking = True
-            print("[TTS] Playback started")
+            self._notify_playback_started()
 
             sd.play(decoded.samples, samplerate=decoded.sample_rate)
             while sd.get_stream().active:
@@ -188,7 +204,7 @@ class TextToSpeech:
                 self._is_speaking = False
 
             if not was_stopped:
-                print("[TTS] Playback completed")
+                self._notify_playback_completed()
             return not was_stopped
 
         except Exception as e:
@@ -232,7 +248,7 @@ class TextToSpeech:
 
             with self._lock:
                 self._is_speaking = True
-            print("[TTS] Playback started")
+            self._notify_playback_started()
 
             # Play via sounddevice
             sd.play(decoded.samples, samplerate=decoded.sample_rate)
@@ -247,7 +263,7 @@ class TextToSpeech:
                 self._is_speaking = False
 
             if not was_stopped:
-                print("[TTS] Playback completed")
+                self._notify_playback_completed()
             return not was_stopped
 
         except Exception as e:
@@ -267,7 +283,7 @@ class TextToSpeech:
 
             with self._lock:
                 self._is_speaking = True
-            print("[TTS] Playback started")
+            self._notify_playback_started()
 
             engine = pyttsx3.init()
             engine.setProperty("rate", 185)
@@ -279,7 +295,7 @@ class TextToSpeech:
                 self._is_speaking = False
 
             if not was_stopped:
-                print("[TTS] Playback completed")
+                self._notify_playback_completed()
             return not was_stopped
 
         except Exception as e:

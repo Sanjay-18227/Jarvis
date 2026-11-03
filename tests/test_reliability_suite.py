@@ -144,22 +144,24 @@ def test_normalizer_screen_vision_queries():
 
 def test_screen_vision_truthfulness_when_disabled():
     """Verify screen inspection truthfully reports when inactive."""
-    vision = ScreenVision()
-    res = vision.inspect_screen("Can you see my screen?")
-    assert res.success is False
-    assert "screen inspection isn't enabled yet" in res.message.lower()
-    # Must never claim it can see the screen
-    assert "i see" not in res.message.lower()
-    assert "i can see" not in res.message.lower()
+    with patch("config.settings.settings.vision_enabled", False):
+        vision = ScreenVision()
+        res = vision.inspect_screen("Can you see my screen?")
+        assert res.success is False
+        assert any(p in res.message.lower() for p in ["screen inspection isn't available", "screen inspection isn't enabled"])
+        # Must never claim it can see the screen
+        assert "i see" not in res.message.lower()
+        assert "i can see" not in res.message.lower()
 
 
 def test_fast_router_screen_vision_truthful():
-    """Verify FastRouter returns truthful refusal for 'Can you see my screen?'."""
-    router = FastRouter()
-    action, resp = router.try_fast_path("Can you see my screen?")
-    assert action == "screen_vision"
-    assert "screen inspection isn't enabled yet" in resp.lower()
-    assert "i can see" not in resp.lower()
+    """Verify FastRouter returns truthful refusal for 'Can you see my screen?' when disabled."""
+    with patch("config.settings.settings.vision_enabled", False):
+        router = FastRouter()
+        action, resp = router.try_fast_path("Can you see my screen?")
+        assert action == "screen_vision"
+        assert any(p in resp.lower() for p in ["screen inspection isn't available", "screen inspection isn't enabled"])
+        assert "i can see" not in resp.lower()
 
 
 def test_simulated_application_launch_failure():
@@ -296,9 +298,10 @@ def test_agent_process_input_open_vscode():
 
 
 def test_agent_process_input_can_you_see_my_screen():
-    """Verify agent truthfully answers 'Can you see my screen?' without hallucination."""
-    agent = JarvisAgent()
-    resp = agent.process_input("Can you see my screen?")
-    assert "screen inspection isn't enabled yet" in resp.lower()
-    assert "i see your screen" not in resp.lower()
-    assert "i can see" not in resp.lower()
+    """Verify agent truthfully answers 'Can you see my screen?' without hallucination when disabled."""
+    with patch("config.settings.settings.vision_enabled", False):
+        agent = JarvisAgent()
+        resp = agent.process_input("Can you see my screen?")
+        assert any(p in resp.lower() for p in ["screen inspection isn't available", "screen inspection isn't enabled"])
+        assert "i see your screen" not in resp.lower()
+        assert "i can see" not in resp.lower()

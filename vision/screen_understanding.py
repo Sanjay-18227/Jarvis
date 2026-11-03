@@ -1,12 +1,15 @@
 """
-Screen Understanding (ScreenVision) Subsystem
-Performs on-demand visual analysis using Gemini multimodal vision.
-Fulfills Requirement G: Never claims to see the screen unless a real vision tool executed successfully.
+Screen Understanding (ScreenVision) Subsystem (Phase 4)
+Performs on-demand visual analysis using Gemini multimodal vision via ScreenVisionService.
+Fulfills Requirement G & Section 27:
+- Never claims to see the screen unless a real vision tool executed successfully.
+- Conforms to structured visual result contract.
 """
 
 from typing import Optional, Dict, Any, Tuple
 from core.tool_result import ToolResult
 from vision.screen_capture import ScreenCapture
+from vision.screen_vision_service import ScreenVisionService, get_screen_vision_service
 from config.constants import SpeakerClassification
 from config.settings import get_settings
 
@@ -15,99 +18,64 @@ class ScreenVision:
     """
     Analyzes desktop screen and active window context on user request.
     Strictly truthful: reports failure if vision capability is not currently active.
+    Wraps ScreenVisionService for full Phase 4 multimodal capabilities.
     """
 
-    def __init__(self, capture: Optional[ScreenCapture] = None, enabled: Optional[bool] = None):
+    def __init__(
+        self,
+        capture: Optional[ScreenCapture] = None,
+        service: Optional[ScreenVisionService] = None,
+        enabled: Optional[bool] = None,
+    ):
         self.capture = capture or ScreenCapture()
+        self.service = service or ScreenVisionService(capture=self.capture, enabled=enabled)
         self.enabled = enabled
 
     def inspect_screen(
         self,
         user_query: str,
         speaker: SpeakerClassification = SpeakerClassification.OWNER,
+        mode: Optional[str] = None,
     ) -> ToolResult:
         """
         Captures the screen and asks multimodal model to analyze the UI/error.
-        Returns ToolResult. Never claims to see the screen if vision is not working.
+        Returns ToolResult. Never claims to see the screen if vision did not run.
         """
         print(f"[ROUTER] intent=SCREEN_VISION query='{user_query}'")
         print(f"[TOOL] screen_capture display")
 
-        cfg = get_settings()
-        is_enabled = self.enabled if self.enabled is not None else getattr(cfg, "screen_vision_enabled", False)
-        if not is_enabled or not cfg.gemini_api_key:
-            print(f"[RESULT] success=False reason='Screen vision not enabled'")
-            return ToolResult.fail(
-                action="inspect_screen",
-                message="Sir, screen inspection isn't enabled yet, so I can't visually verify it.",
-                error="Vision API not active",
-            )
+        q_low = user_query.lower()
 
-        # Step 1: Detect active window
-        win_info = self.capture.get_active_window_info()
+        # Determine optimal capture mode (ACTIVE_WINDOW vs FULL_SCREEN)
+        if mode:
+            chosen_mode = mode
+        elif any(k in q_low for k in ["error", "dialog", "button", "terminal", "this window", "which application am i looking at"]):
+            chosen_mode = "ACTIVE_WINDOW"
+        elif any(k in q_low for k in ["all apps", "what apps", "entire screen", "what is on my screen", "what's on my screen"]):
+            chosen_mode = "FULL_SCREEN"
+        else:
+            chosen_mode = "ACTIVE_WINDOW"
 
-        # Step 2: Privacy check
-        if win_info.get("is_sensitive", False):
-            if speaker != SpeakerClassification.OWNER:
-                print(f"[RESULT] success=False error='Privacy Block'")
-                return ToolResult.fail(
-                    action="inspect_screen",
-                    message="Access denied: The active window contains sensitive private credentials.",
-                    error="Sensitive window in foreground",
-                )
-
-        # Step 3: Capture display
-        img_bytes = self.capture.capture_bytes()
-        if not img_bytes:
-            print(f"[VERIFY] screen_captured=False")
-            print(f"[RESULT] success=False")
-            return ToolResult.fail(
-                action="inspect_screen",
-                message="Sir, I was unable to capture your display.",
-                error="Display capture returned empty bytes",
-            )
-
-        print(f"[VERIFY] screen_captured=True bytes={len(img_bytes)}")
-
-        # Step 4: Ask Gemini Vision
-        try:
-            from google import genai
-            from google.genai import types
-
-            client = genai.Client(api_key=cfg.gemini_api_key)
-            prompt = (
-                f"Active Window: {win_info.get('title', 'Unknown')}\n"
-                f"User Request: {user_query}\n"
-                "Please analyze the screen and answer concisely (1-3 sentences) suitable to be spoken aloud."
-            )
-
-            response = client.models.generate_content(
-                model=cfg.gemini_model or "gemini-3.8-flash",
-                contents=[
-                    types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
-                    prompt,
-                ],
-            )
-            analysis_text = (response.text or "").strip()
-            if analysis_text:
-                print(f"[RESULT] success=True")
-                return ToolResult.ok(
-                    action="inspect_screen",
-                    message=analysis_text,
-                    evidence=f"Active window: {win_info.get('title')}",
-                )
-        except Exception as e:
-            print(f"[RESULT] success=False error='{str(e)}'")
-            return ToolResult.fail(
-                action="inspect_screen",
-                message="Sir, screen inspection isn't enabled yet, so I can't visually verify it.",
-                error=f"Vision model error: {str(e)}",
-            )
-
-        print(f"[RESULT] success=False reason='Screen vision returned empty analysis'")
-        return ToolResult.fail(
-            action="inspect_screen",
-            message="Sir, screen inspection isn't enabled yet, so I can't visually verify it.",
-            error="Vision API not active",
+        # Execute analysis via ScreenVisionService
+        res = self.service.analyze_screen(
+            mode=chosen_mode,
+            user_query=user_query,
+            speaker=speaker,
         )
 
+        if res.get("success", False):
+            print("[VERIFY] screen_captured=True")
+            print("[RESULT] success=True")
+            return ToolResult.ok(
+                action="inspect_screen",
+                message=res.get("summary", "Analysis complete."),
+                evidence=str(res.get("evidence", {})),
+            )
+        else:
+            print("[VERIFY] screen_captured=False")
+            print(f"[RESULT] success=False error='{res.get('error')}'")
+            return ToolResult.fail(
+                action="inspect_screen",
+                message=res.get("summary", "Sir, screen inspection isn't available right now."),
+                error=res.get("error", "Vision unavailable"),
+            )

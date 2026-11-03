@@ -91,8 +91,8 @@ class AppIndexer:
         "microsoft edge": {"name": "Microsoft Edge", "launch_cmd": "msedge.exe", "process": "msedge.exe", "kind": "exe"},
         "task manager": {"name": "Task Manager", "launch_cmd": "taskmgr.exe", "process": "Taskmgr.exe", "kind": "exe"},
         "taskmgr": {"name": "Task Manager", "launch_cmd": "taskmgr.exe", "process": "Taskmgr.exe", "kind": "exe"},
-        "paint": {"name": "Paint", "launch_cmd": "mspaint.exe", "process": "mspaint.exe", "kind": "exe"},
-        "mspaint": {"name": "Paint", "launch_cmd": "mspaint.exe", "process": "mspaint.exe", "kind": "exe"},
+        "paint": {"name": "Paint", "launch_cmd": "ms-paint:", "process": "mspaint.exe", "kind": "uri"},
+        "mspaint": {"name": "Paint", "launch_cmd": "ms-paint:", "process": "mspaint.exe", "kind": "uri"},
         "vscode": {"name": "Visual Studio Code", "launch_cmd": "code", "process": "Code.exe", "kind": "exe"},
         "vs code": {"name": "Visual Studio Code", "launch_cmd": "code", "process": "Code.exe", "kind": "exe"},
         "visual studio code": {"name": "Visual Studio Code", "launch_cmd": "code", "process": "Code.exe", "kind": "exe"},
@@ -261,9 +261,9 @@ class AppIndexer:
         elif q_clean in ["paint", "mspaint"]:
             return {
                 "name": "Paint",
-                "launch_target": "mspaint.exe",
-                "launch_cmd": "mspaint.exe",
-                "kind": "exe",
+                "launch_target": "ms-paint:",
+                "launch_cmd": "ms-paint:",
+                "kind": "uri",
                 "process": "mspaint.exe",
             }
         elif q_clean in ["vscode", "vs code", "visual studio code", "code"]:
@@ -334,7 +334,7 @@ class AppIndexer:
 
         return None
 
-    def launch_app(self, app_name: str) -> ToolResult:
+    def launch_app(self, app_name: str, target_arg: Optional[str] = None) -> ToolResult:
         """
         Launches the requested application locally with zero Microsoft Store redirects.
         Verifies launch or window focus.
@@ -343,22 +343,23 @@ class AppIndexer:
         raw_name = app_name.strip()
         clean_name = re.sub(r"[^a-zA-Z0-9 ]", "", raw_name).lower().strip()
 
-        print(f"[ROUTER] intent=OPEN_APP target={raw_name}")
+        print(f"[ROUTER] intent=OPEN_APP target={raw_name}" + (f" arg={target_arg}" if target_arg else ""))
 
-        # Step 1: Check running window to bring to focus
+        # Step 1: If no specific target argument is passed, check running window to bring to focus
         from computer.windows_controller import WindowsController
         win_ctrl = WindowsController()
 
-        focused, _ = win_ctrl.focus_window(clean_name)
-        if focused:
-            print(f"[TOOL] focus_window target={clean_name}")
-            print(f"[VERIFY] window_focused=True")
-            print(f"[RESULT] success=True")
-            return ToolResult.ok(
-                action="open_app",
-                message=f"Brought {raw_name.capitalize()} to focus, Sir.",
-                evidence=f"Focused existing window for {raw_name}",
-            )
+        if not target_arg:
+            focused, _ = win_ctrl.focus_window(clean_name)
+            if focused:
+                print(f"[TOOL] focus_window target={clean_name}")
+                print(f"[VERIFY] window_focused=True")
+                print(f"[RESULT] success=True")
+                return ToolResult.ok(
+                    action="open_app",
+                    message=f"Brought {raw_name.capitalize()} to focus, Sir.",
+                    evidence=f"Focused existing window for {raw_name}",
+                )
 
         # Step 2: Search local laptop catalog
         app_info = self.find_app(clean_name)
@@ -378,19 +379,25 @@ class AppIndexer:
         target = app_info["launch_target"]
         expected_proc = app_info.get("process", "unknown.exe")
 
-        print(f"[TOOL] launch_app app={display_name} target={target}")
+        print(f"[TOOL] launch_app app={display_name} target={target}" + (f" arg={target_arg}" if target_arg else ""))
 
         try:
             if kind == "uri":
                 os.system(f"start {target}")
             elif kind == "lnk":
-                os.startfile(target)
+                if target_arg:
+                    subprocess.Popen(f'start "" "{target}" "{target_arg}"', shell=True)
+                else:
+                    os.startfile(target)
             else:
                 # Wrap target path in quotes if it contains spaces
                 if os.path.exists(target) and " " in target:
                     cmd_to_run = f'"{target}"'
                 else:
                     cmd_to_run = target
+
+                if target_arg:
+                    cmd_to_run = f'{cmd_to_run} "{target_arg}"'
 
                 subprocess.Popen(
                     cmd_to_run,

@@ -236,14 +236,14 @@ class BrowserController:
         browser_label = "Google Chrome" if resolved_browser == "chrome" else "Microsoft Edge"
         expected_proc = "chrome.exe" if resolved_browser == "chrome" else "msedge.exe"
 
-        print(f"[ROUTER] intent=OPEN_WEBSITE target={display_name}")
-        print(f"[BROWSER] selected={browser_label}")
+        print(f"[ROUTER] intent=OPEN_WEBSITE target={display_name.lower()}")
+        print(f"[BROWSER] browser={resolved_browser}")
         print(f"[TOOL] open_url={clean_url}")
 
         if resolved_browser == "chrome":
             chrome_path = _find_chrome_exe()
             if not chrome_path:
-                print(f"[VERIFY] chrome_running=False")
+                print(f"[VERIFY] browser_running=False")
                 print(f"[RESULT] success=False")
                 return ToolResult.fail(
                     action="open_website",
@@ -272,14 +272,16 @@ class BrowserController:
                 verified = True
                 break
 
-        if resolved_browser == "edge":
-            print(f"[VERIFY] msedge_running={verified}")
-        else:
-            print(f"[VERIFY] chrome_running={verified}")
+        print(f"[VERIFY] browser_running={verified}")
 
         if verified:
             print(f"[RESULT] success=True")
-            msg = f"Opened {display_name} in {browser_label}, Sir." if browser else f"Opened {display_name}, Sir."
+            if browser:
+                msg = f"Opened {display_name} in {browser_label}, Sir."
+            elif "youtube" in display_name.lower() and not ("search" in display_name.lower()):
+                msg = "Opened YouTube, Sir."
+            else:
+                msg = f"Opened {display_name}, Sir."
             return ToolResult.ok(
                 action="open_website",
                 message=msg,

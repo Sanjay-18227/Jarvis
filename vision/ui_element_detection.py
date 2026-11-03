@@ -66,17 +66,20 @@ class UIElementDetector:
 
     def get_focused_control_info(self) -> Dict[str, Any]:
         """Returns details on the current foreground window and active control."""
-        fg_hwnd = win32gui.GetForegroundWindow()
-        if not fg_hwnd:
+        try:
+            fg_hwnd = win32gui.GetForegroundWindow()
+            if not fg_hwnd:
+                return {"title": "Desktop", "class": "Progman", "rect": (0, 0, 1920, 1080)}
+
+            title = win32gui.GetWindowText(fg_hwnd)
+            class_name = win32gui.GetClassName(fg_hwnd)
+            rect = win32gui.GetWindowRect(fg_hwnd)
+
+            return {
+                "hwnd": fg_hwnd,
+                "title": title,
+                "class": class_name,
+                "rect": rect,
+            }
+        except Exception:
             return {"title": "Desktop", "class": "Progman", "rect": (0, 0, 1920, 1080)}
-
-        title = win32gui.GetWindowText(fg_hwnd)
-        class_name = win32gui.GetClassName(fg_hwnd)
-        rect = win32gui.GetWindowRect(fg_hwnd)
-
-        return {
-            "hwnd": fg_hwnd,
-            "title": title,
-            "class": class_name,
-            "rect": rect,
-        }

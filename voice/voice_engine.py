@@ -67,6 +67,13 @@ class VoiceEngine(ABC):
         """
         pass
 
+    def record_audio(self) -> Optional[bytes]:
+        """
+        Records raw audio bytes from the active turn detection / VAD.
+        Enables concurrent STT transcription and Speaker Verification on the same audio turn.
+        """
+        return None
+
     @abstractmethod
     def speak(self, text: str, voice: Optional[str] = None) -> bool:
         """
@@ -116,14 +123,17 @@ class LegacyVoiceEngine(VoiceEngine):
         self.stop_speaking()
         self.set_state(VoiceState.IDLE)
 
-    def listen(self) -> Optional[Tuple[bytes, str]]:
+    def record_audio(self) -> Optional[bytes]:
         # Self-echo protection: do not record if TTS is still active
         if self._is_speaking:
             time.sleep(0.1)
             return None
 
         self.set_state(VoiceState.LISTENING)
-        audio_data = self.recorder.record_phrase()
+        return self.recorder.record_phrase()
+
+    def listen(self) -> Optional[Tuple[bytes, str]]:
+        audio_data = self.record_audio()
         if not audio_data:
             return None
 
@@ -139,7 +149,6 @@ class LegacyVoiceEngine(VoiceEngine):
 
         self._is_speaking = True
         self.set_state(VoiceState.SPEAKING)
-        print("[TTS] Playback started")
 
         # Start playback asynchronously
         self._playback_thread = self.tts.speak_async(text, voice=voice)
@@ -239,6 +248,15 @@ class LiveKitVoiceEngine(VoiceEngine):
         else:
             self._fallback_engine.stop()
         self.set_state(VoiceState.IDLE)
+
+    def record_audio(self) -> Optional[bytes]:
+        # Self-echo protection: never accept microphone input while speaking
+        if self._is_speaking or self._fallback_engine.is_speaking():
+            time.sleep(0.1)
+            return None
+
+        self.set_state(VoiceState.LISTENING)
+        return self._fallback_engine.record_audio()
 
     def listen(self) -> Optional[Tuple[bytes, str]]:
         """

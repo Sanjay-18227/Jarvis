@@ -22,7 +22,7 @@ def get_llm_provider(settings: Optional[Settings] = None, force_mock: bool = Fal
         return MockProvider()
 
     cfg = settings or get_settings()
-    provider_type = cfg.llm_provider.lower().strip()
+    provider_type = (getattr(cfg, "primary_reasoning_provider", None) or cfg.llm_provider).lower().strip()
 
     if provider_type == "openrouter":
         provider = OpenRouterProvider(

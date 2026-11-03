@@ -45,10 +45,17 @@ class Settings:
     preferred_title: str = "Sir"
 
     # AI Provider (OpenRouter is Primary, Gemini for Multimodal/Vision)
+    primary_reasoning_provider: str = "openrouter"
     llm_provider: str = "openrouter"
     openrouter_api_key: Optional[str] = None
-    openrouter_model: str = "meta-llama/llama-3.3-70b-instruct"
+    openrouter_model: str = "openrouter/free"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
+
+    # Local Small Language Model (SLM) Layer (Fast local routing & offline reasoning)
+    slm_enabled: bool = True
+    slm_model: str = "qwen3-1.7b"
+    slm_mode: str = "non_thinking"
+    slm_max_tokens: int = 128
 
     groq_api_key: Optional[str] = None
     groq_model: str = "llama-3.3-70b-versatile"
@@ -56,7 +63,14 @@ class Settings:
 
     gemini_api_key: Optional[str] = None
     gemini_model: str = "gemini-3.8-flash"
-    screen_vision_enabled: bool = False
+    screen_vision_enabled: bool = True
+    vision_enabled: bool = True
+    vision_provider: str = "gemini"
+    vision_capture_mode: str = "active_window"  # active_window | full_screen
+    vision_save_screenshots: bool = False
+    vision_screenshots_dir: Optional[str] = None
+    vision_cache_seconds: float = 2.0
+    vision_require_owner: bool = True
     openai_api_key: Optional[str] = None
     elevenlabs_api_key: Optional[str] = None
 
@@ -125,20 +139,39 @@ class Settings:
             else:
                 load_dotenv(override=True)
 
+        # Vision settings (Phase 4)
+        vision_env_val = os.getenv("VISION_ENABLED")
+        if vision_env_val is not None:
+            v_enabled = vision_env_val.lower() == "true"
+        else:
+            v_enabled = os.getenv("SCREEN_VISION_ENABLED", "true").lower() == "true"
+
         return cls(
             owner_name=os.getenv("OWNER_NAME", "Sanjay"),
             assistant_name=os.getenv("ASSISTANT_NAME", "JARVIS"),
             preferred_title=os.getenv("PREFERRED_TITLE", "Sir"),
-            llm_provider=os.getenv("LLM_PROVIDER", "openrouter").lower(),
+            primary_reasoning_provider=os.getenv("PRIMARY_REASONING_PROVIDER", os.getenv("LLM_PROVIDER", "openrouter")).lower(),
+            llm_provider=os.getenv("LLM_PROVIDER", os.getenv("PRIMARY_REASONING_PROVIDER", "openrouter")).lower(),
             openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
-            openrouter_model=os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct"),
+            openrouter_model=os.getenv("OPENROUTER_MODEL", "openrouter/free"),
             openrouter_base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+            slm_enabled=os.getenv("SLM_ENABLED", "true").lower() == "true",
+            slm_model=os.getenv("SLM_MODEL", "qwen3-1.7b"),
+            slm_mode=os.getenv("SLM_MODE", "non_thinking"),
+            slm_max_tokens=int(os.getenv("SLM_MAX_TOKENS", "128")),
             groq_api_key=os.getenv("GROQ_API_KEY"),
             groq_model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
             groq_stt_model=os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo"),
             gemini_api_key=os.getenv("GEMINI_API_KEY"),
             gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
-            screen_vision_enabled=os.getenv("SCREEN_VISION_ENABLED", "false").lower() == "true",
+            screen_vision_enabled=v_enabled,
+            vision_enabled=v_enabled,
+            vision_provider=os.getenv("VISION_PROVIDER", "gemini").lower(),
+            vision_capture_mode=os.getenv("VISION_CAPTURE_MODE", "active_window").lower(),
+            vision_save_screenshots=os.getenv("VISION_SAVE_SCREENSHOTS", "false").lower() == "true",
+            vision_screenshots_dir=os.getenv("VISION_SCREENSHOTS_DIR"),
+            vision_cache_seconds=float(os.getenv("VISION_CACHE_SECONDS", "2.0")),
+            vision_require_owner=os.getenv("VISION_REQUIRE_OWNER", "true").lower() == "true",
             openai_api_key=os.getenv("OPENAI_API_KEY"),
             elevenlabs_api_key=os.getenv("ELEVENLABS_API_KEY"),
             voice_provider=os.getenv("VOICE_PROVIDER", "livekit").lower(),
@@ -195,3 +228,6 @@ def get_settings() -> Settings:
     if _global_settings is None:
         _global_settings = Settings.load_from_env()
     return _global_settings
+
+
+settings = get_settings()

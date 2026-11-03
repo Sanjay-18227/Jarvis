@@ -21,11 +21,14 @@ PRIVILEGED_COMPUTER_ACTIONS: Set[str] = {
     "open_app", "close_app", "launch_app", "open_application", "window_control", "focus_window",
     "minimize_window", "maximize_window", "close_window",
     # Browser & Web automation
-    "open_website", "open_url", "search_youtube", "play_youtube",
+    "open_browser", "open_website", "open_url", "search_youtube", "play_youtube",
     "play_music", "play_latest_music", "search_web", "browser_control",
     # File & Folder operations
     "create_file", "write_file", "read_file", "delete_file", "rename_file",
-    "create_folder", "delete_folder", "move_file", "copy_file",
+    "create_folder", "delete_folder", "move_file", "copy_file", "open_folder", "open_folder_in_app",
+    # Paint & Native App Controls
+    "paint_action", "notepad_action", "draw_rectangle", "draw_line", "draw_circle", "new_canvas",
+    "calculate", "multi_step_local",
     # System execution & Scripting
     "run_python", "execute_python", "cmd", "powershell", "terminal",
     "shell", "run_command", "install_software", "uninstall_software",
@@ -103,9 +106,10 @@ def is_privileged_action(action_name: str, intent: Optional[str] = None) -> bool
         return True
 
     privileged_intents = {
-        "OPEN_APP", "OPEN_WEBSITE", "SEARCH_YOUTUBE", "PLAY_YOUTUBE",
-        "PLAY_LATEST_MUSIC", "SEARCH_WEB", "MULTI_STEP", "SCREEN_VISION",
-        "MEDIA_CONTROL", "LOCK_SCREEN"
+        "OPEN_APP", "OPEN_BROWSER", "OPEN_WEBSITE", "OPEN_FOLDER_IN_APP", "OPEN_FOLDER",
+        "CREATE_FOLDER", "CREATE_FILE", "RUN_PYTHON", "PAINT_ACTION", "NOTEPAD_ACTION",
+        "SEARCH_YOUTUBE", "PLAY_YOUTUBE", "PLAY_LATEST_MUSIC", "SEARCH_WEB", "MULTI_STEP",
+        "MULTI_STEP_LOCAL", "SCREEN_VISION", "MEDIA_CONTROL", "LOCK_SCREEN", "CALCULATE"
     }
     if int_clean in privileged_intents:
         return True
@@ -158,8 +162,8 @@ def authorize_action(
         # Any UNKNOWN or UNCERTAIN classification strictly invalidates any prior session
         session.invalidate("Speaker classification is not OWNER")
 
-    # Check effective authority: current speaker must be OWNER (or valid unexpired owner session)
-    has_owner_authority = (speaker == SpeakerClassification.OWNER) or session.is_owner_active()
+    # Check effective authority: current speaker must be OWNER
+    has_owner_authority = (speaker == SpeakerClassification.OWNER)
 
     requires_privilege = False
     # Check if raw_query or parameters contain destructive or command keywords
@@ -178,9 +182,9 @@ def authorize_action(
 
     # 2. UNKNOWN / UNCERTAIN speaker -> ZERO computer-control privileges
     if not has_owner_authority:
-        print(f"[SECURITY] Action '{act_clean}' BLOCKED for speaker={speaker.value}")
+        print(f"[SECURITY] DENIED: Action '{act_clean}' blocked for speaker={speaker.value}")
         if speaker == SpeakerClassification.UNCERTAIN:
-            return False, "Speaker identity uncertain. Voice verification required before executing.", False
+            return False, "Access denied. Voice verification is uncertain. Please verify your voice signature to access computer controls.", False
         return False, "Access denied. I don't recognize this voice. Computer controls are restricted and locked.", False
 
     # 3. OWNER speaker: Check for HIGH RISK confirmation requirement

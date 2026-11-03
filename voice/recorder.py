@@ -34,6 +34,14 @@ class AudioRecorder:
         self.is_recording = False
         self._interrupted = False
 
+        # Robust adaptive noise floor & hysteresis settings
+        self.noise_floor_rms: float = 120.0
+        self.onset_threshold: float = float(self.energy_threshold)
+        self.continue_threshold: float = float(self.energy_threshold) * 0.75
+        self.enroll_threshold_multiplier = float(getattr(self.settings, "vad_enroll_threshold_multiplier", 1.40))
+        self.min_threshold = float(getattr(self.settings, "vad_min_threshold", 250.0))
+        self.max_threshold = float(getattr(self.settings, "vad_max_threshold", 3200.0))
+
     def interrupt(self):
         """Immediately signals recording loop to stop."""
         self._interrupted = True
@@ -53,32 +61,36 @@ class AudioRecorder:
         crossings = np.sum(np.abs(np.diff(signs))) / 2.0
         return float(crossings / (len(audio_chunk) - 1))
 
-    def calculate_speech_confidence(self, audio_chunk: np.ndarray) -> Tuple[bool, float]:
+    def calculate_speech_confidence(
+        self, audio_chunk: np.ndarray, threshold: Optional[float] = None
+    ) -> Tuple[bool, float]:
         """
         Evaluates speech confidence using acoustic RMS energy and Zero-Crossing Rate (ZCR).
         Rejects impulsive clicks, keyboard taps, fan whines, and low-energy room noise.
         """
         rms = self.calculate_rms(audio_chunk)
-        if rms < self.energy_threshold:
+        effective_threshold = threshold if threshold is not None else self.energy_threshold
+        if rms < effective_threshold:
             return False, 0.0
 
         zcr = self.calculate_zero_crossing_rate(audio_chunk)
         # Sharp high-frequency clicks and static hiss exhibit very high ZCR (>0.45)
-        if zcr > 0.45 and rms < self.energy_threshold * 2.0:
+        if zcr > 0.45 and rms < effective_threshold * 2.0:
             return False, 0.2
 
-        margin = min(1.0, (rms - self.energy_threshold) / (self.energy_threshold + 1e-6))
+        margin = min(1.0, (rms - effective_threshold) / (effective_threshold + 1e-6))
         confidence = float(0.5 + 0.5 * margin)
         return True, confidence
 
     def calibrate_ambient_noise(self, duration: Optional[float] = None) -> float:
         """
         Samples ambient background noise to dynamically adapt the speech threshold.
-        Measures baseline room noise and sets the speech threshold above the noise floor.
+        Uses a robust statistic (median RMS over calibration frames) to ignore spikes.
+        Calculates onset and continuation thresholds with safety caps and hysteresis.
         """
         import sounddevice as sd
 
-        cal_dur = duration if duration is not None else getattr(self.settings, "vad_noise_calibration_seconds", 0.5)
+        cal_dur = duration if duration is not None else getattr(self.settings, "vad_noise_calibration_seconds", 0.6)
         try:
             samples_to_read = int(self.sample_rate * cal_dur)
             recording = sd.rec(
@@ -88,17 +100,53 @@ class AudioRecorder:
                 dtype="int16",
             )
             sd.wait()
-            rms = self.calculate_rms(recording)
-            baseline = max(rms, 80.0)
+
+            raw_audio = recording.flatten()
+            if len(raw_audio) == 0:
+                return float(self.energy_threshold)
+
+            # Split into ~25ms calibration frames to compute robust frame-level statistics
+            frame_len = max(int(self.sample_rate * 0.025), 128)
+            num_frames = len(raw_audio) // frame_len
+            if num_frames >= 3:
+                frame_rms_values = [
+                    self.calculate_rms(raw_audio[i * frame_len : (i + 1) * frame_len])
+                    for i in range(num_frames)
+                ]
+                # Discard extreme transient spikes (> 2.5x raw median)
+                raw_median = float(np.median(frame_rms_values))
+                valid_frames = [v for v in frame_rms_values if v <= max(raw_median * 2.5, 300.0)]
+                noise_floor = float(np.median(valid_frames)) if valid_frames else raw_median
+            else:
+                noise_floor = self.calculate_rms(raw_audio)
+
+            baseline = max(noise_floor, 80.0)
+            self.noise_floor_rms = baseline
+
             if self.dynamic_threshold:
-                # Set speech threshold above ambient noise floor
-                configured_floor = getattr(self.settings, "vad_speech_threshold", 400)
-                self.energy_threshold = max(int(baseline * 2.2), configured_floor)
-                print(f"[VAD] Ambient noise calibrated: baseline_rms={baseline:.1f}, speech_threshold={self.energy_threshold}")
-            return rms
+                # Adaptive speech thresholding: noise_floor * configurable_ratio (1.35 - 1.5)
+                # Bounded by min_threshold and max_threshold cap so noisy calibration doesn't lock out owner
+                mult = self.enroll_threshold_multiplier
+                calculated_onset = baseline * mult
+                self.onset_threshold = max(self.min_threshold, min(calculated_onset, self.max_threshold))
+
+                # Hysteresis: continuation threshold is lower than onset threshold
+                self.continue_threshold = max(
+                    self.min_threshold * 0.75,
+                    min(baseline * 1.15, self.onset_threshold * 0.75),
+                )
+                self.energy_threshold = int(self.onset_threshold)
+
+                print(
+                    f"[VAD] Ambient noise calibrated: noise_floor_rms={baseline:.1f}, "
+                    f"threshold_rms={self.onset_threshold:.1f} (continue={self.continue_threshold:.1f})"
+                )
+            return baseline
         except Exception as e:
             fallback = getattr(self.settings, "vad_speech_threshold", 400)
             self.energy_threshold = fallback
+            self.onset_threshold = float(fallback)
+            self.continue_threshold = float(fallback) * 0.75
             return float(self.energy_threshold)
 
     def record_phrase(
@@ -159,6 +207,11 @@ class AudioRecorder:
             "total_record_seconds": 0.0,
         }
 
+        speech_frames_count = 0
+        silence_frames_count = 0
+        speech_rms_list = []
+        peak_rms = 0.0
+
         try:
             with sd.InputStream(
                 samplerate=self.sample_rate,
@@ -171,13 +224,17 @@ class AudioRecorder:
                     data, _ = stream.read(self.chunk_size)
                     chunk = data.flatten()
                     rms = self.calculate_rms(chunk)
-                    is_speech, conf = self.calculate_speech_confidence(chunk)
+                    if rms > peak_rms:
+                        peak_rms = rms
 
                     if not speech_started:
                         pre_buffer.append(chunk)
+                        # Onset detection using onset_threshold
+                        is_speech, conf = self.calculate_speech_confidence(chunk, threshold=self.onset_threshold)
 
-                        if is_speech:
+                        if is_speech or rms >= self.onset_threshold:
                             candidate_frames.append(chunk)
+                            speech_rms_list.append(rms)
                             if len(candidate_frames) == 1:
                                 print("[VAD] Speech candidate detected")
                             if len(candidate_frames) >= consecutive_required:
@@ -186,6 +243,7 @@ class AudioRecorder:
                                 last_speech_time = now
                                 last_continuing_log_time = now
                                 silence_active = False
+                                speech_frames_count += len(candidate_frames)
                                 self.last_latency_stats["vad_wait_seconds"] = round(now - start_time, 3)
                                 # Prepend pre-speech buffer and candidate frames so syllables are never clipped
                                 frames.extend(list(pre_buffer))
@@ -194,21 +252,28 @@ class AudioRecorder:
                                 print("[VAD] Speech started")
                                 print("[TURN] User turn started")
                         else:
-                            if candidate_frames:
+                            # Allow candidate frames a single low frame grace before dropping
+                            if len(candidate_frames) > 1:
+                                # Keep candidate buffer intact for 1 low-energy transition consonant
+                                pass
+                            elif candidate_frames:
                                 print("[VAD] Ignored background noise")
                                 candidate_frames.clear()
                             else:
-                                if rms < self.energy_threshold and (now - last_noise_log_time) >= 3.0:
+                                if rms < self.onset_threshold and (now - last_noise_log_time) >= 3.0:
                                     print("[VAD] Energy below speech threshold")
                                     last_noise_log_time = now
 
                             if (now - start_time) > wait_timeout:
                                 break
                     else:
-                        # Recording active speech utterance
+                        # Recording active speech utterance with continuation hysteresis
                         frames.append(chunk)
+                        is_active_speech, _ = self.calculate_speech_confidence(chunk, threshold=self.continue_threshold)
 
-                        if is_speech or rms >= self.energy_threshold:
+                        if is_active_speech or rms >= self.continue_threshold:
+                            speech_frames_count += 1
+                            speech_rms_list.append(rms)
                             last_speech_time = now
                             if silence_active:
                                 silence_active = False
@@ -220,7 +285,8 @@ class AudioRecorder:
                                 print("[VAD] Speech continuing")
                                 last_continuing_log_time = now
                         else:
-                            # Below energy threshold -> potential pause / silence
+                            # Below continue_threshold -> potential pause / silence
+                            silence_frames_count += 1
                             if not silence_active:
                                 silence_active = True
                                 print("[VAD] Silence detected")
@@ -252,6 +318,14 @@ class AudioRecorder:
 
         if not frames or not speech_started:
             return None
+
+        avg_speech_rms = float(np.mean(speech_rms_list)) if speech_rms_list else 0.0
+        # Summarized diagnostic log showing real audio levels and frame counts
+        print(
+            f"[VAD] noise_floor_rms={self.noise_floor_rms:.1f} threshold_rms={self.onset_threshold:.1f} "
+            f"frame_rms={avg_speech_rms:.1f} peak_rms={peak_rms:.1f} "
+            f"speech_frames={speech_frames_count} silence_frames={silence_frames_count}"
+        )
 
         # Convert recorded frames into standard WAV bytes
         raw_audio = np.concatenate(frames).tobytes()
