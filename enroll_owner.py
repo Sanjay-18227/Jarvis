@@ -143,7 +143,14 @@ def main():
     should_replace = args.replace or args.re_enroll or True
 
     if args.synth:
-        success = run_synthetic_enrollment(enroller, owner_name=args.name)
+        # Synthetic enrollment is for automated tests only. Keep it in an isolated
+        # profile so a synthesized voice can never overwrite the real owner's
+        # biometric .dat/ECAPA files.
+        synth_dir = os.path.join(settings.base_dir, "data", "speaker_profiles", "synthetic_test")
+        synth_verifier = SpeakerVerifier(profile_path=os.path.join(synth_dir, "owner_profile.dat"))
+        synth_enroller = VoiceEnrollment(verifier=synth_verifier, recorder=recorder)
+        success = run_synthetic_enrollment(synth_enroller, owner_name=args.name)
+        profile_verifier = synth_verifier
     else:
         try:
             success = enroller.run_interactive_enrollment(
@@ -152,6 +159,7 @@ def main():
                 min_samples=args.min_samples,
                 replace=should_replace,
             )
+            profile_verifier = verifier
         except KeyboardInterrupt:
             print("\n[ENROLL] Enrollment cancelled.")
             print("[ENROLL] Existing owner profile preserved/restored.\n")
@@ -160,8 +168,8 @@ def main():
     if success:
         print("\n" + "=" * 60)
         print(f"✓ OWNER VOICE PROFILE ACTIVATED FOR {args.name.upper()}")
-        print(f"Profile saved to: data/speaker_profiles/owner_profile.dat")
-        print(f"Calibrated threshold: {verifier.similarity_threshold_owner:.2f}")
+        print(f"Profile saved to: {profile_verifier.profile_path}")
+        print(f"Calibrated threshold: {profile_verifier.similarity_threshold_owner:.2f}")
         print("Computer control security: LOCKED to verified owner voice signature.")
         print("=" * 60 + "\n")
         sys.exit(0)

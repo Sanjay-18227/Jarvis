@@ -453,6 +453,13 @@ class JarvisAgent:
         self.memory.add_user_message(clean_input)
         self.memory.add_assistant_message(final_response)
 
+        # Model resource hygiene: unload heavy idle models after the configured idle window
+        try:
+            from core.models.model_manager import get_model_manager
+            get_model_manager().unload_idle()
+        except Exception:
+            pass
+
         # Audit Logging
         status = ActionStatus.SUCCESS if success else ActionStatus.FAILED
         self.audit_logger.log_action(
@@ -552,9 +559,27 @@ class JarvisAgent:
             print("[SECURITY] DENIED: Speaker is not OWNER")
             get_speaker_session().invalidate("Speaker is not OWNER")
 
+        # Voice PIN recovery fallback (last resort; typing is preferred: python main.py --auth-pin)
         if not transcription:
             self.state_machine.set_state(VoiceState.LISTENING)
             return None
+
+        try:
+            from security.recovery import authenticate_with_pin, has_recovery_pin
+            if (speaker != SpeakerClassification.OWNER
+                    and has_recovery_pin()
+                    and not get_speaker_session().is_owner_active()):
+                import re
+                m = re.search(r'\bpin\s*(?:is\s+)?(\d{4,12})\b', transcription, re.IGNORECASE)
+                if m and authenticate_with_pin(m.group(1)):
+                    print("[SECURITY] Owner session recovered via PIN (voice fallback)")
+                    self._current_speaker = SpeakerClassification.OWNER
+                    speaker = SpeakerClassification.OWNER
+                elif m:
+                    print("[SECURITY] PIN fallback rejected (denied / lockout)")
+                    return "PIN verification failed. Access remains locked, Sir."
+        except Exception:
+            pass
 
         print(f"User ({speaker.value}): {transcription}")
         response = self.process_input(transcription, speaker=speaker)

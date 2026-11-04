@@ -200,6 +200,48 @@ class ScreenVisionService:
         win_title = win_info.get("title", "")
         cfg = get_settings()
 
+        # Local-first vision policy:
+        #  - VISION_PROVIDER=local  -> optional SmolVLM (opt-in; disabled by default on 8 GB)
+        #  - LOCAL_ONLY=true        -> never send screenshots to Gemini unless
+        #                              ALLOW_REMOTE_VISION=true is explicitly set
+        #  - fallback               -> structural UIA/process observation (always local)
+        use_local_vlm = cfg.vision_provider in ("local", "smolvlm")
+        remote_vision_allowed = (not cfg.local_only) or bool(getattr(cfg, "allow_remote_vision", False))
+        if use_local_vlm:
+            try:
+                from vision.local_vlm import get_local_vlm
+                vlm = get_local_vlm()
+                local_summary = vlm.describe(image, user_query)
+                if local_summary:
+                    print("[VISION] local SmolVLM observation produced")
+                    return {
+                        "success": True,
+                        "action": "screen_analysis",
+                        "active_app": active_app,
+                        "summary": local_summary,
+                        "evidence": {
+                            "screenshot_captured": True,
+                            "vision_provider": "local-smolvlm-256m",
+                            "confidence": 0.55,
+                            "window_title": win_title,
+                        },
+                        "error": None,
+                    }
+            except Exception as e:
+                log.info("[VISION] local VLM path skipped: %s", e)
+            print("[VISION] local VLM unavailable -> structural fallback")
+            return self._build_local_fallback(
+                win_info=win_info, query=user_query,
+                reason="local VLM unavailable (opt-in required)",
+            )
+
+        if not remote_vision_allowed:
+            print("[VISION] remote vision disabled by LOCAL_ONLY -> structural fallback")
+            return self._build_local_fallback(
+                win_info=win_info, query=user_query,
+                reason="LOCAL_ONLY=true (parallel remote vision disabled)",
+            )
+
         # Check API key and client
         client = self._get_gemini_client()
         if not client or not cfg.gemini_api_key:

@@ -210,6 +210,24 @@ class VoiceEnrollment:
 
     def backup_existing_profile(self) -> Optional[str]:
         """Creates a timestamped backup of existing owner profile before replacement."""
+        # Custom/test profiles are isolated: back them up beside themselves and never
+        # touch the production biometric profile or its backup directory.
+        if getattr(self.verifier, "custom_profile", False):
+            target_file = getattr(self.verifier, "profile_path", None)
+            if not target_file or not os.path.exists(target_file):
+                return None
+            backup_dir = os.path.join(os.path.dirname(target_file), "backups")
+            os.makedirs(backup_dir, exist_ok=True)
+            backup_path = os.path.join(
+                backup_dir, f"owner_profile_backup_{time.strftime('%Y%m%d_%H%M%S')}.dat")
+            try:
+                shutil.copy2(target_file, backup_path)
+                print(f"[ENROLL] Previous profile backed up to: {backup_path}")
+                return backup_path
+            except Exception as e:
+                print(f"[ENROLL] Backup failed: {e}")
+                return None
+
         base_dir = get_settings().base_dir
         dat_path = os.path.join(base_dir, "data", "speaker_profiles", "owner_profile.dat")
         json_path = os.path.join(base_dir, "memory", "owner_voice_profile.json")
@@ -236,6 +254,18 @@ class VoiceEnrollment:
 
     def restore_backup(self, backup_path: Optional[str] = None) -> bool:
         """Restores previous owner profile from backup to guarantee fail-safe replacement."""
+        if getattr(self.verifier, "custom_profile", False):
+            target_file = getattr(self.verifier, "profile_path", None)
+            source = backup_path if (backup_path and os.path.exists(backup_path)) else None
+            if source and target_file:
+                try:
+                    shutil.copy2(source, target_file)
+                    print(f"[ENROLL] Existing profile preserved/restored from: {source}")
+                    return True
+                except Exception as e:
+                    print(f"[ENROLL] Failed restoring backup profile: {e}")
+            return False
+
         base_dir = get_settings().base_dir
         dat_path = os.path.join(base_dir, "data", "speaker_profiles", "owner_profile.dat")
         default_bak = os.path.join(base_dir, "data", "speaker_profiles", "owner_profile.dat.bak")
@@ -387,7 +417,7 @@ class VoiceEnrollment:
                 print(f"[ENROLL] Sample {idx} rejected: {reason}")
                 continue
 
-            emb = self.verifier.extract_embedding(sample)
+            emb = self.verifier.extract_mfcc_embedding(sample)
             if emb is not None:
                 valid_embeddings.append(emb)
 
@@ -426,8 +456,44 @@ class VoiceEnrollment:
         print("[ENROLL] Owner profile created")
         print("[ENROLL] Profile saved")
 
+        # Optional ECAPA (PyTorch) biometric profile for the same samples.
+        try:
+            if self.verifier._ecapa.available():
+                self._enroll_ecapa(audio_samples)
+        except Exception as e:
+            print(f"[ENROLL] ECAPA enrollment skipped: {e}")
+
         self.run_calibration_verification(consistent, centroid, calibrated_threshold)
         return True
+
+    def _enroll_ecapa(self, audio_samples: List[bytes]) -> bool:
+        """
+        Builds ECAPA 192-d embeddings from the already captured samples.
+        Keeps previous profile if validation fails (fail-safe).
+        """
+        verifier = self.verifier
+        vecs = []
+        for s in audio_samples:
+            v = verifier._ecapa.embedding(s)
+            if v is not None:
+                vecs.append(v)
+        if len(vecs) < 2:
+            print("[ENROLL] ECAPA: too few valid embeddings; keeping current profile")
+            return False
+        cent = np.mean(vecs, axis=0)
+        norm = np.linalg.norm(cent)
+        if norm <= 0:
+            return False
+        cent = cent / norm
+        v = np.stack(vecs)
+        v = v / np.maximum(np.linalg.norm(v, axis=1, keepdims=True), 1e-6)
+        intra = [float(np.dot(cent, x)) for x in v]
+        # representatives = samples close to centroid (>=92% of mean intra similarity)
+        reps = [vec for vec, s in zip(v, intra) if s >= float(np.mean(intra)) * 0.92][:8]
+        ok = verifier.save_ecapa_profile(cent, reps, sample_count=len(vecs), intra_similarities=intra)
+        if ok:
+            print(f"[ENROLL] ECAPA profile saved (samples={len(vecs)}, dim=192)")
+        return ok
 
     def run_interactive_enrollment(
         self,
@@ -517,8 +583,9 @@ class VoiceEnrollment:
                         attempt += 1
                         continue
 
-                    # Extract speaker embeddings
-                    emb = self.verifier.extract_embedding(audio)
+                    # Extract legacy MFCC embeddings for the .dat profile. ECAPA is
+                    # enrolled separately (192-d) so the two spaces never mix.
+                    emb = self.verifier.extract_mfcc_embedding(audio)
                     if emb is None:
                         print(f"[ENROLL] Sample {sample_num} rejected: embedding extraction failed\n")
                         attempt += 1
@@ -618,6 +685,15 @@ class VoiceEnrollment:
             print(f"[ENROLL] Valid samples={len(consistent_embs)}")
             print("[ENROLL] Owner profile created")
             print("[ENROLL] Profile saved")
+
+            # Build the ECAPA biometric profile from the same clean samples. If the
+            # model is unavailable, the MFCC profile still works and verification
+            # only fails closed when an ECAPA profile is actually present.
+            try:
+                if self.verifier._ecapa.available():
+                    self._enroll_ecapa(accepted_samples)
+            except Exception as e:
+                print(f"[ENROLL] ECAPA enrollment skipped: {e}")
 
             self.run_calibration_verification(consistent_embs, centroid, calibrated_threshold)
             self._handle_raw_storage(temp_dir, temp_files)

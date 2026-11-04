@@ -128,6 +128,7 @@ def test_provider_factory_selection():
     settings_openrouter = Settings(
         llm_provider="openrouter",
         openrouter_api_key="sk-or-test",
+        local_only=False,
     )
     p_or = get_llm_provider(settings=settings_openrouter)
     assert isinstance(p_or, OpenRouterProvider)
@@ -138,6 +139,7 @@ def test_provider_factory_selection():
         openrouter_api_key=None,
         gemini_api_key=None,
         groq_api_key=None,
+        allow_remote_llm=True,
     )
     with patch("requests.get", side_effect=Exception("No ollama")):
         p_fallback = get_llm_provider(settings=settings_no_keys)
@@ -149,6 +151,7 @@ def test_jarvis_agent_wires_configured_provider():
     settings = Settings(
         llm_provider="openrouter",
         openrouter_api_key="sk-or-valid-key",
+        local_only=False,
     )
     agent = JarvisAgent(settings=settings)
     assert isinstance(agent.provider, OpenRouterProvider)

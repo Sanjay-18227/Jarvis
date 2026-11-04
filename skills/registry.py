@@ -102,6 +102,8 @@ def _init_default_skills(registry: SkillRegistry):
     from skills.notepad_skill import NotepadSkill
     from skills.file_skill import FileSkill
     from skills.system_skill import SystemSkill
+    from skills.memory_skill import MemorySkill
+    from skills.scheduler_skill import SchedulerSkill
 
     registry.register(CalculatorSkill())
     registry.register(PaintSkill())
@@ -110,3 +112,5 @@ def _init_default_skills(registry: SkillRegistry):
     registry.register(NotepadSkill())
     registry.register(FileSkill())
     registry.register(SystemSkill())
+    registry.register(MemorySkill())
+    registry.register(SchedulerSkill())

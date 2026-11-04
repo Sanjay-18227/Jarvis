@@ -32,6 +32,20 @@ from vision.screen_understanding import ScreenVision
 from vision.privacy_filter import PrivacyFilter
 
 
+@pytest.fixture(autouse=True)
+def _allow_remote_vision_for_tests():
+    """Phase 4 tests inject a fake Gemini client; production keeps LOCAL_ONLY by default.
+
+    This mirrors the explicit owner opt-in (ALLOW_REMOTE_VISION=true) required in .env.
+    No real screenshots leave the machine: the client is mocked in every test.
+    """
+    cfg = get_settings()
+    previous = cfg.allow_remote_vision
+    cfg.allow_remote_vision = True
+    yield
+    cfg.allow_remote_vision = previous
+
+
 # ---------------------------------------------------------
 # Test 1 — Basic Screen Description (Section 33)
 # ---------------------------------------------------------

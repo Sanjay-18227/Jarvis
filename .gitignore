@@ -24,6 +24,20 @@ env/
 *.raw
 !tests/fixtures/*.wav
 
+# Local biometrics, databases, recovery material (never commit)
+data/speaker_profiles/
+data/jobs.db
+data/jobs.db-*
+data/owner_recovery.json
+memory/*.db
+memory/*.db-*
+memory/owner_voice_profile.json
+*.sqlite3
+
+# Downloaded model weights (large, re-downloadable). Keep the registry.
+models/*
+!models/model_registry.yaml
+
 # Logs
 *.log
 logs/

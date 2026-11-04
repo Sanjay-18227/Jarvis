@@ -179,7 +179,7 @@ def test_verification_failure_fails_closed_to_unknown():
 
 def test_voice_engine_factory_and_fallback():
     """VoiceEngine factory returns LiveKitVoiceEngine and safely falls back if offline."""
-    settings = Settings(voice_provider="livekit", livekit_url="")
+    settings = Settings(voice_provider="livekit", livekit_url="", local_only=False)
     engine = get_voice_engine(settings=settings)
     assert isinstance(engine, LiveKitVoiceEngine)
 

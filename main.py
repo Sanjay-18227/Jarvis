@@ -17,6 +17,8 @@ from core.agent import JarvisAgent
 
 def print_banner(agent: JarvisAgent):
     settings = agent.settings
+    mode = ("Local-Only" if settings.local_only and not settings.allow_remote_llm
+            else "Hybrid/Online")
     print("=" * 55)
     print("      ██╗ █████╗ ██████╗ ██╗   ██╗██╗███████╗")
     print("      ██║██╔══██╗██╔══██╗██║   ██║██║██╔════╝")
@@ -24,7 +26,7 @@ def print_banner(agent: JarvisAgent):
     print(" ██   ██║██╔══██║██╔══██╗╚██╗ ██╔╝██║╚════██║")
     print(" ╚█████╔╝██║  ██║██║  ██║ ╚████╔╝ ██║███████║")
     print("  ╚════╝ ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚═╝╚══════╝")
-    print("    Windows Autonomous Personal AI — Online")
+    print(f"    Windows Autonomous Personal AI — {mode}")
     print("=" * 55)
     print(f" Owner:         {settings.owner_name} ({settings.preferred_title})")
     print(f" AI Brain:      {agent.provider.name}")
@@ -36,8 +38,30 @@ def print_banner(agent: JarvisAgent):
 
 def main():
     settings = get_settings()
+
+    # diagnostics & owner recovery that must not initialize heavy subsystems
+    if "--mic-test" in sys.argv:
+        from scripts.mic_test import run_mic_test
+        sys.exit(run_mic_test())
+
+    if "--set-pin" in sys.argv:
+        from security.recovery import _interactive_set_pin
+        _interactive_set_pin()
+
+    if "--auth-pin" in sys.argv:
+        from security.recovery import _interactive_auth
+        _interactive_auth()
+
     agent = JarvisAgent(settings=settings)
     print_banner(agent)
+
+    # Durable local scheduler (only runs while JARVIS/laptop is ON - documented limitation)
+    if "--no-scheduler" not in sys.argv:
+        try:
+            from core.automation.task_scheduler import get_scheduler
+            get_scheduler().start()
+        except Exception as e:
+            print(f"[SCHEDULER] not started: {e}")
 
     # Check CLI flags
     if "--enroll" in sys.argv:

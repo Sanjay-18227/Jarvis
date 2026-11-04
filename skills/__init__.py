@@ -11,6 +11,8 @@ from skills.browser_skill import BrowserSkill
 from skills.notepad_skill import NotepadSkill
 from skills.file_skill import FileSkill
 from skills.system_skill import SystemSkill
+from skills.memory_skill import MemorySkill
+from skills.scheduler_skill import SchedulerSkill
 
 __all__ = [
     "BaseSkill",
@@ -23,4 +25,6 @@ __all__ = [
     "NotepadSkill",
     "FileSkill",
     "SystemSkill",
+    "MemorySkill",
+    "SchedulerSkill",
 ]

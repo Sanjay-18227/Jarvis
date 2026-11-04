@@ -24,6 +24,16 @@ def get_llm_provider(settings: Optional[Settings] = None, force_mock: bool = Fal
     cfg = settings or get_settings()
     provider_type = (getattr(cfg, "primary_reasoning_provider", None) or cfg.llm_provider).lower().strip()
 
+    # Local-first privacy policy: no utterance leaves the machine unless the owner
+    # explicitly opts in with ALLOW_REMOTE_LLM=true (or LOCAL_ONLY=false).
+    if getattr(cfg, "local_only", False) and not getattr(cfg, "allow_remote_llm", False):
+        print("[LLM Factory] LOCAL_ONLY=true -> cloud reasoning disabled (local skills/SLM only).")
+        print("[LLM Factory] Set ALLOW_REMOTE_LLM=true to enable OpenRouter/Gemini/Groq.")
+        return MockProvider(
+            name="MockJARVIS (Local-Only Mode - deterministic skills + local SLM; "
+                 "set ALLOW_REMOTE_LLM=true for cloud reasoning)"
+        )
+
     if provider_type == "openrouter":
         provider = OpenRouterProvider(
             api_key=cfg.openrouter_api_key,

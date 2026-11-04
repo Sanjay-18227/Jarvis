@@ -86,6 +86,8 @@ def test_1_owner_enrollment_multi_sample(tmp_path):
 
     assert data["owner_name"] == "Sanjay"
     assert data["sample_count"] == 10
+    # Legacy profile always keeps the 42-dim MFCC space; ECAPA is stored separately
+    # in owner_profile_ecapa.json and validated by the modernization suite.
     assert data["dim"] == 42
     assert "calibrated_threshold" in data
     assert len(data["embedding"]) == 42

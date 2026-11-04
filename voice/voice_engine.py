@@ -313,6 +313,12 @@ def get_voice_engine(
     cfg = settings or get_settings()
     provider = getattr(cfg, "voice_provider", "livekit").lower()
 
+    # LOCAL_ONLY means local microphone transport, not just local reasoning.
+    # LiveKit is a cloud relay; require an explicit non-local mode to use it.
+    if provider == "livekit" and getattr(cfg, "local_only", True):
+        print("[VOICE] LOCAL_ONLY=true -> using local microphone transport (LiveKit disabled).")
+        return LegacyVoiceEngine(settings=cfg, state_machine=state_machine)
+
     if provider == "legacy":
         print("[VOICE] Initializing LegacyVoiceEngine")
         return LegacyVoiceEngine(settings=cfg, state_machine=state_machine)

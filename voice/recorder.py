@@ -65,8 +65,10 @@ class AudioRecorder:
         self, audio_chunk: np.ndarray, threshold: Optional[float] = None
     ) -> Tuple[bool, float]:
         """
-        Evaluates speech confidence using acoustic RMS energy and Zero-Crossing Rate (ZCR).
-        Rejects impulsive clicks, keyboard taps, fan whines, and low-energy room noise.
+        Evaluates speech confidence using acoustic RMS energy + Zero-Crossing Rate,
+        confirmed by Silero VAD when available (rejects clicks, taps, fan noise).
+
+        Voice flow: RMS candidate -> Silero confirmation -> speech.
         """
         rms = self.calculate_rms(audio_chunk)
         effective_threshold = threshold if threshold is not None else self.energy_threshold
@@ -80,7 +82,17 @@ class AudioRecorder:
 
         margin = min(1.0, (rms - effective_threshold) / (effective_threshold + 1e-6))
         confidence = float(0.5 + 0.5 * margin)
-        return True, confidence
+
+        # Silero confirmation layer (hysteresis-aware; no-op if model unavailable)
+        try:
+            from voice.vad import HybridVADStats
+            if not hasattr(self, "_hybrid_vad"):
+                self._hybrid_vad = HybridVADStats()
+            mono = audio_chunk.astype("float32") / 32768.0 \
+                if audio_chunk.dtype == np.int16 else audio_chunk.astype("float32")
+            return self._hybrid_vad.evaluate(mono, True, confidence, self.sample_rate)
+        except Exception:
+            return True, confidence
 
     def calibrate_ambient_noise(self, duration: Optional[float] = None) -> float:
         """

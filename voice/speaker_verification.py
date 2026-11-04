@@ -69,8 +69,14 @@ class SpeakerVerifier:
         self.similarity_threshold_owner = getattr(settings, "owner_similarity_threshold", 0.78)
         self.similarity_threshold_uncertain = getattr(settings, "uncertain_similarity_threshold", 0.70)
         self._mel_filters = _mel_filterbank(26, 512, 16000)
-
+        # ECAPA (PyTorch) biometric engine state
+        from voice.ecapa_engine import get_ecapa_engine
+        self._ecapa = get_ecapa_engine()
+        self.ecapa_centroid: Optional[np.ndarray] = None
+        self.ecapa_representatives: List[np.ndarray] = []
         self.load_profile()
+        self.load_ecapa_profile()
+        self._last_embedding_space = "mfcc"
 
     def load_profile(self) -> bool:
         """Loads enrolled owner voice embedding and representative embeddings from disk with fail-closed validation."""
@@ -166,6 +172,65 @@ class SpeakerVerifier:
         print(f"[SpeakerVerifier] Owner voice profile saved for {owner_name}.")
 
 
+    # ------------------------------------------------------------------
+    # ECAPA (PyTorch) profile: separate biometric space, atomic save/load
+    # ------------------------------------------------------------------
+    @property
+    def _ecapa_path(self) -> str:
+        # Custom (isolated) profiles keep their ECAPA data in the same directory, so
+        # tests/enrollment experiments never touch the production biometric profile.
+        if self.custom_profile and self.profile_path:
+            return os.path.join(os.path.dirname(self.profile_path), "owner_profile_ecapa.json")
+        base_dir = get_settings().base_dir
+        return os.path.join(base_dir, "data", "speaker_profiles", "owner_profile_ecapa.json")
+
+    def load_ecapa_profile(self) -> bool:
+        try:
+            if not os.path.exists(self._ecapa_path):
+                return False
+            with open(self._ecapa_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            cent = np.asarray(data.get("centroid", []), dtype="float32")
+            reps = [np.asarray(r, dtype="float32") for r in data.get("representatives", [])]
+            if cent.size != 192:
+                return False
+            if not np.isfinite(cent).all():
+                return False
+            self.ecapa_centroid = cent
+            self.ecapa_representatives = [r for r in reps if r.size == 192]
+            print(f"[SPEAKER] ECAPA profile loaded (model=ecapa, dim=192, reps={len(self.ecapa_representatives)})")
+            return True
+        except Exception as e:
+            log.error("[SPEAKER] ECAPA profile load failed: %s", e)
+            return False
+
+    def save_ecapa_profile(self, centroid: np.ndarray, representatives: List[np.ndarray],
+                           sample_count: int = 1, intra_similarities: Optional[List[float]] = None) -> bool:
+        """Atomically writes the ECAPA biometric profile (biometric vectors stay local)."""
+        import time, tempfile
+        data = {
+            "owner_name": self.owner_name or "Sanjay",
+            "model": "speechbrain/spkrec-ecapa-voxceleb",
+            "dim": int(centroid.shape[0]),
+            "centroid": centroid.tolist(),
+            "representatives": [r.tolist() for r in representatives],
+            "sample_count": sample_count,
+            "intra_similarities": intra_similarities or [],
+            "updated_at": time.time(),
+        }
+        try:
+            os.makedirs(os.path.dirname(self._ecapa_path), exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(self._ecapa_path), suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+            os.replace(tmp, self._ecapa_path)
+            self.ecapa_centroid = centroid
+            self.ecapa_representatives = representatives
+            return True
+        except Exception as e:
+            log.error("[SPEAKER] ECAPA profile save failed: %s", e)
+            return False
+
     def extract_embedding(self, audio_data: bytes) -> Optional[np.ndarray]:
         """
         Extracts a normalized acoustic Mel-frequency feature embedding (42-dim).
@@ -183,6 +248,32 @@ class SpeakerVerifier:
         if not audio_data:
             return None
 
+        # ECAPA (PyTorch) biometric embedding takes priority when a model + profile exist.
+        # FAIL CLOSED if the ECAPA model cannot load (insufficient memory / not downloaded):
+        # voice alone is no longer sufficient; the owner must authenticate via PIN recovery
+        # (python main.py --auth-pin). We do NOT silently degrade to the weaker MFCC space
+        # once an ECAPA biometric profile is the enrolled required credential.
+        if self.ecapa_centroid is not None:
+            if not self._ecapa.available():
+                print("[SPEAKER] ECAPA model unavailable (memory pressure) -> FAIL CLOSED")
+                print("[SPEAKER] Alternative auth: locally run `python main.py --auth-pin`")
+                self._last_embedding_space = "ecapa"
+                return None
+            emb = self._ecapa.embedding(audio_data)
+            if emb is not None:
+                self._last_embedding_space = "ecapa"
+                return emb
+            log.warning("[SPEAKER] ECAPA embedding failed on this sample -> failing closed")
+            self._last_embedding_space = "ecapa"
+            return None
+
+        self._last_embedding_space = "mfcc"
+        return self.extract_mfcc_embedding(audio_data)
+
+    def extract_mfcc_embedding(self, audio_data: bytes) -> Optional[np.ndarray]:
+        """Classic 42-dim MFCC embedding (legacy profile space and enrollment)."""
+        if not audio_data:
+            return None
         try:
             with wave.open(io.BytesIO(audio_data), "rb") as wf:
                 sample_rate = wf.getframerate()
@@ -319,6 +410,23 @@ class SpeakerVerifier:
                 print(f"[SPEAKER] Threshold={self.similarity_threshold_owner:.2f}")
                 print("[SPEAKER] Result=UNKNOWN")
                 return SpeakerClassification.UNKNOWN, 0.0
+
+            embedding_space = getattr(self, "_last_embedding_space", "mfcc")
+            if embedding_space == "ecapa":
+                # ECAPA (PyTorch) biometric model space: dot product on normalized vectors
+                sims = [float(np.dot(self.ecapa_centroid, sample_embedding))]
+                for rep in self.ecapa_representatives:
+                    sims.append(float(np.dot(rep, sample_embedding)))
+                best = max(sims)
+                confidence = max(0.0, min(1.0, best))
+                borderline_lower = getattr(self, "similarity_threshold_uncertain", 0.65)
+                print(f"[SPEAKER] ECAPA Similarity={best:.3f} Threshold={self.similarity_threshold_owner:.2f}")
+                if confidence >= self.similarity_threshold_owner:
+                    return SpeakerClassification.OWNER, confidence
+                if confidence >= borderline_lower:
+                    print("[SPEAKER] Result=UNCERTAIN (borderline; needs secondary verification)")
+                    return SpeakerClassification.UNCERTAIN, confidence
+                return SpeakerClassification.UNKNOWN, confidence
 
             # Cosine similarity against centroid: 1 - cosine_distance
             dist = cosine(self.owner_embedding, sample_embedding)

@@ -75,8 +75,8 @@ class LocalSLM:
         self.ram_usage_mb = round(max(mem_after - mem_before, 42.5), 2)
         self.is_loaded = True
 
-        print(f"[SLM] Model loaded: {self.model_name} ({self.quantization})")
-        print(f"[SLM] Runtime: {self.runtime_name} | Mode: {self.mode}")
+        print(f"[SLM] rules engine ready (deterministic fast routing)")
+        print(f"[SLM] neural backend: qwen3-0.6b (on-demand, PyTorch CPU, local-only)")
         print(f"[SLM] Startup load time: {self.loading_time_ms:.1f}ms | Resident RAM: ~{self.ram_usage_mb:.1f}MB")
         return True
 
@@ -340,6 +340,13 @@ class LocalSLM:
         if any(p in clean for p in ["mute", "unmute"]):
             return {"intent": "MEDIA_CONTROL", "action": "mute", "confidence": 0.95, "needs_remote_reasoning": False}
 
+        # 12. Neural SLM augmentation (Qwen3-0.6B via PyTorch, on demand).
+        # Only reached when all deterministic rules failed. Returns validated structured JSON
+        # or None (offline / insufficient RAM / invalid output) -> caller escalates as before.
+        neural = self._infer_intent_neural(raw_text, ctx)
+        if neural is not None:
+            return neural
+
         # If not matching deterministic local patterns, mark for remote reasoning
         return {
             "intent": "GENERAL_AI",
@@ -347,6 +354,106 @@ class LocalSLM:
             "confidence": 0.50,
             "needs_remote_reasoning": True,
         }
+
+    # ------------------------------------------------------------------
+    _NEURAL_INTENTS = {
+        "GENERAL_AI": set(),
+        "OPEN_APP": {"target_app"},
+        "OPEN_BROWSER": set(),
+        "OPEN_WEBSITE": {"url"},
+        "OPEN_FOLDER": {"folder"},
+        "OPEN_FOLDER_IN_APP": {"target_app", "folder"},
+        "CREATE_FOLDER": {"folder", "location"},
+        "CREATE_FILE": {"filename", "folder"},
+        "RUN_PYTHON": {"filename"},
+        "PAINT_ACTION": {"action"},
+        "NOTEPAD_ACTION": {"action", "text"},
+        "BATTERY": set(),
+        "DIAGNOSTICS": set(),
+        "MEDIA_CONTROL": {"action"},
+        "CALCULATE": {"expression"},
+    }
+
+    def _infer_intent_neural(self, text: str, ctx: ContextMemory) -> Optional[Dict[str, Any]]:
+        """Constrained local SLM intent extraction (never executes anything)."""
+        if not self.enabled:
+            return None
+        backend = getattr(self.settings, "slm_neural_backend", None)
+        if backend == "off":
+            return None
+        try:
+            from core.models.model_manager import get_model_manager
+            mm = get_model_manager()
+            model_id = "qwen3-0.6b-instruct"
+            if mm.statuses().get(model_id) == "disabled":
+                return None
+            # Never trigger a surprise 1.6 GB download from a middle of a voice command.
+            if not mm.is_downloaded(model_id):
+                return None
+            t0 = time.perf_counter()
+            system = (
+                "You are JARVIS command understanding. Reply with ONLY one JSON object, no prose, "
+                "no markdown, no explanation.\n"
+                "Allowed intents: " + ", ".join(sorted(self._NEURAL_INTENTS)) + ".\n"
+                "Schema: {\"intent\": str, \"target_app\": str?, \"folder\": str?, \"filename\": str?, "
+                "\"url\": str?, \"expression\": str?, \"action\": str?, \"text\": str?, \"confidence\": 0-1}.\n"
+                "Examples:\n"
+                "user: bro start my code editor -> {\"intent\":\"OPEN_APP\",\"target_app\":\"vscode\",\"confidence\":0.95}\n"
+                "user: go to youtube -> {\"intent\":\"OPEN_WEBSITE\",\"url\":\"youtube.com\",\"confidence\":0.95}\n"
+                "user: open Kumar in vscode -> {\"intent\":\"OPEN_FOLDER_IN_APP\",\"target_app\":\"vscode\",\"folder\":\"Kumar\",\"confidence\":0.94}\n"
+                "user: create a python file agent.py there -> {\"intent\":\"CREATE_FILE\",\"filename\":\"agent.py\",\"confidence\":0.9}\n"
+                "user: what is the capital of France -> {\"intent\":\"GENERAL_AI\",\"confidence\":0.99}\n"
+                "Rules: Never invent folder/filename not present in user text or context. "
+                "If request needs general knowledge or conversation, use GENERAL_AI."
+            )
+            context_line = (
+                f"Context: active_app={getattr(ctx, 'active_app', None)}, "
+                f"active_folder={getattr(ctx, 'active_folder', None)}, "
+                f"active_file={getattr(ctx, 'active_file', None)}"
+            )
+            reply = mm.generate_text(
+                model_id,
+                f"{context_line}\nUser: {text}",
+                system=system, max_new_tokens=96, enforce_non_thinking=True,
+            )
+            ms = int((time.perf_counter() - t0) * 1000)
+            print(f"[PERF] slm_ms={ms}")
+            if not reply:
+                return None
+            start, end = reply.find("{"), reply.rfind("}")
+            if start == -1 or end <= start:
+                return None
+            plan = json.loads(reply[start:end + 1])
+            intent = str(plan.get("intent", "")).upper().strip()
+            if intent not in self._NEURAL_INTENTS:
+                return None
+            try:
+                conf = float(plan.get("confidence", 0))
+            except (TypeError, ValueError):
+                return None
+            if conf < 0.80:
+                return None
+            out = {"intent": intent, "confidence": round(conf, 3),
+                   "needs_remote_reasoning": intent == "GENERAL_AI"}
+            for key in self._NEURAL_INTENTS[intent]:
+                val = plan.get(key)
+                if val is not None and str(val).strip():
+                    out[key] = str(val).strip()
+            if intent == "GENERAL_AI":
+                out["query"] = text
+            # Sanity: entity values must appear in the user's words/context (no invented names)
+            for key in ("folder", "filename"):
+                if key in out:
+                    hay = (text + " " + str(getattr(ctx, "active_folder", "")) + " "
+                           + str(getattr(ctx, "active_file", ""))).lower()
+                    if out[key].lower() not in hay:
+                        log_msg = f"[SLM] rejected invented {key}='{out[key]}' (not in utterance/context)"
+                        print(log_msg)
+                        return None
+            return out
+        except Exception as e:
+            print(f"[SLM] neural backend unavailable: {e}")
+            return None
 
     def try_slm_routing(
         self,

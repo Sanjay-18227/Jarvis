@@ -1,0 +1,182 @@
+﻿# JARVIS Model Registry
+# Every entry documents license, verified HF revision (sha), size and RAM budget.
+# The ModelManager reads this file and auto-decides startup/on-demand/disabled.
+#
+# Hardware target (audited 2026-11-03):
+#   AMD Ryzen 3 7320U, 4C/8T, 8 GB total RAM, integrated Radeon (no CUDA), ~66 GB free disk.
+#   -> CPU-only inference, one heavy model resident at a time.
+
+defaults:
+  cache_dir: models        # resolved against project root; override with MODEL_DIR env
+  allow_hidden_files: false
+  ignore_patterns:
+    - "*.bin"              # prefer safetensors; avoid duplicateweights
+    - "*.msgpack"
+    - "*.h5"
+    - "*.onnx_data"
+  download_timeout_seconds: 3600
+
+models:
+
+  # ---------------- Voice Activity Detection ----------------
+  - model_id: silero-vad
+    hf_repo: null                       # installed via pip `silero-vad` package (official)
+    task: voice_activity_detection
+    license: MIT
+    architecture: lstm-svad_v5          # official Silero VAD v5
+    parameter_count: ~1.8M
+    expected_disk_size_mb: 5
+    estimated_ram_mb: 60
+    supported_languages: [any]
+    runtime: torch | onnx
+    quantization: none
+    hardware_requirements: {min_ram_mb: 100, device: cpu}
+    model_revision: "6.2.3 (pip silero-vad; bundled VAD v5.1.2)"
+    enabled: true
+    load_policy: startup                # tiny; always resident
+    fallback_model: rms_energy          # internal energy gate fallover
+    notes: "Hysteresis + adaptive noise floor handled in voice/vad.py"
+
+  # ---------------- Speech to text ----------------
+  - model_id: whisper-tiny-local
+    loader_method: load_whisper_tiny
+    hf_repo: Systran/faster-whisper-tiny
+    task: speech_recognition            # ASR, multilingual + ta
+    license: mit
+    architecture: whisper (encoder-decoder, CTranslate2 conversion)
+    parameter_count: 39M
+    expected_disk_size_mb: 80
+    estimated_ram_mb: 320
+    supported_languages: [en, ta, mixed]
+    runtime: faster-whisper (CT2 int8 primary) | transformers+torch fallback
+    quantization: int8 (CT2)
+    hardware_requirements: {min_ram_mb: 400, device: cpu}
+    model_revision: d90ca5fe260221311c53c58e660288d3deb8d356
+    enabled: true
+    load_policy: on_demand             # loaded by the first voice command
+    fallback_model: whisper-base-local
+    notes: "Official Systran CT2 conversion of openai/whisper-tiny; required by faster-whisper"
+
+  - model_id: whisper-base-local
+    loader_method: load_whisper_base
+    hf_repo: Systran/faster-whisper-base
+    task: speech_recognition            # higher-accuracy on-demand ASR
+    license: mit
+    architecture: whisper (encoder-decoder, CTranslate2 conversion)
+    parameter_count: 74M
+    expected_disk_size_mb: 160
+    estimated_ram_mb: 600
+    supported_languages: [en, ta, mixed]
+    runtime: faster-whisper (CT2 int8)
+    quantization: int8 (CT2)
+    hardware_requirements: {min_ram_mb: 800, device: cpu}
+    model_revision: ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66
+    enabled: true
+    load_policy: on_demand              # only when user asks for higher accuracy
+    fallback_model: whisper-tiny-local
+    notes: "Not auto-loaded; benchmarked in benchmark_models.py"
+
+  # ---------------- Owner speaker verification ----------------
+  - model_id: ecapa-voxceleb-speaker
+    loader_method: load_ecapa_speaker
+    hf_repo: speechbrain/spkrec-ecapa-voxceleb
+    task: speaker_verification
+    license: apache-2.0
+    architecture: ECAPA-TDNN
+    parameter_count: 20.4M
+    expected_disk_size_mb: 110
+    estimated_ram_mb: 180
+    supported_languages: [any]
+    runtime: torchaudio/speechbrain + PyTorch CPU
+    quantization: none (fp32 inference)
+    hardware_requirements: {min_ram_mb: 500, device: cpu}
+    model_revision: 0f99f2d0ebe89ac095bcc5903c4dd8f72b367286
+    enabled: true
+    load_policy: on_demand              # load once on first verify/enroll, keep hot (fraud gate)
+    fallback_model: mfcc_scorer         # current MFCC verifier stays as safe fallback
+    notes: "Embeddings 192-dim; enrollment uses multi-embedding + centroid profile"
+
+  # ---------------- JARVIS local brain (SLM) ----------------
+  - model_id: qwen3-0.6b-instruct
+    loader_method: load_qwen3_slm
+    hf_repo: Qwen/Qwen3-0.6B
+    task: text_generation               # intent NLU / paraphrase / decomposition
+    license: apache-2.0
+    architecture: qwen3 dense decoder
+    parameter_count: 0.6B
+    expected_disk_size_mb: 1600
+    estimated_ram_mb: 2500              # measured fp32 RSS on this laptop
+    supported_languages: [en, ta, mixed]
+    runtime: transformers + PyTorch CPU (fp32)
+    quantization: none (fp32 CPU; int8 measured slower at 13.7s vs 5.8s per generation)
+    hardware_requirements: {min_ram_mb: 2200, device: cpu}
+    model_revision: c1899de289a04d12100db370d81485cdf75e47ca
+    enabled: true
+    load_policy: on_demand              # load for interpret/plan, unload after idle
+    fallback_model: rule_engine         # core/local_slm.py heuristics
+    notes: "Non-thinking template for latency; never executes tools itself"
+    load_constraints: {concurrent_with_ecapa: false, concurrent_with_whisper: true}
+
+  # ---------------- Screen vision (optional) ----------------
+  - model_id: smolvlm-256m-instruct
+    loader_method: load_smolvlm_vlm
+    hf_repo: HuggingFaceTB/SmolVLM-256M-Instruct
+    task: image_text_to_text            # screen understanding summary
+    license: apache-2.0
+    architecture: SmolVLM2 (SigLIP-400M vision encoder + 128M LLM? size claim 256M vision+LLM)
+    parameter_count: 256M approx
+    expected_disk_size_mb: 600
+    estimated_ram_mb: 900
+    supported_languages: [en]           # English-speaking VLM; Tamil UI text weak
+    runtime: transformers + PyTorch CPU
+    quantization: none
+    hardware_requirements: {min_ram_mb: 1500, device: cpu}
+    model_revision: 7e3e67edbbed1bf9888184d9df282b700a323964
+    enabled: false                      # DISABLED by default on 8 GB RAM laptop
+    load_policy: manual                 # user must opt in via SETUP + â‰¥1.5 GB free RAM snapshot
+    fallback_model: uia_structural      # Windows UI Automation structural answer
+    notes: "English-oriented; no Tamil OCR claims"
+    load_constraints: {concurrent_with_any_heavy_model: false}
+
+  # ---------------- Memory embeddings (optional) ----------------
+  - model_id: multilingual-e5-small
+    loader_method: load_e5_embedder
+    hf_repo: intfloat/multilingual-e5-small
+    task: feature_extraction            # semantic memory search
+    license: MIT
+    architecture: xlm-roberta small
+    parameter_count: 118M
+    expected_disk_size_mb: 480
+    estimated_ram_mb: 350
+    supported_languages: [en, ta, multi]
+    runtime: transformers + PyTorch CPU
+    quantization: none
+    hardware_requirements: {min_ram_mb: 700, device: cpu}
+    model_revision: 614241f622f53c4eeff9890bdc4f31cfecc418b3
+    enabled: false                      # FTS search is default; enable manually
+    load_policy: manual
+    fallback_model: sqlite_fts          # FTS5 keyword search
+    notes: "Use query:/passage: prefixes when enabled"
+    load_constraints: {concurrent_with_any_heavy_model: false}
+
+  # ---------------- Local Tamil/English TTS (optional, benchmark first) ----------------
+  - model_id: indic-parler-tts-mini
+    loader_method: load_indic_tts
+    hf_repo: ai4bharat/indic-parler-tts
+    task: text_to_speech
+    license: apache-2.0
+    architecture: parler-tts (parler mini)
+    parameter_count: 500M approx
+    expected_disk_size_mb: 2200
+    estimated_ram_mb: 1800
+    supported_languages: [ta, en]
+    runtime: transformers + PyTorch CPU
+    quantization: none
+    hardware_requirements: {min_ram_mb: 2500, device: cpu}
+    model_revision: 660bc53c64ae83150613264111708a0465211237
+    enabled: false                      # edge-tts stays primary; benchmark before enabling
+    load_policy: manual
+    fallback_model: edge_tts            # current default
+    notes: "Never loaded at startup. Needs benchmark_models.py first"
+    load_constraints: {concurrent_with_any_heavy_model: false}
+

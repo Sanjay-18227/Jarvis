@@ -53,9 +53,19 @@ class Settings:
 
     # Local Small Language Model (SLM) Layer (Fast local routing & offline reasoning)
     slm_enabled: bool = True
-    slm_model: str = "qwen3-1.7b"
+    slm_model: str = "qwen3-0.6b"
     slm_mode: str = "non_thinking"
     slm_max_tokens: int = 128
+
+    # Local-first model stack (Hugging Face / PyTorch)
+    local_only: bool = True                      # when True remote providers stay disabled
+    allow_remote_llm: bool = False               # explicit opt-in for cloud reasoning under LOCAL_ONLY
+    model_dir: Optional[str] = None               # local model cache root (None -> <base>/models)
+    model_unload_idle_seconds: float = 300.0      # unload heavy idle models after N seconds
+    slm_neural_backend: Optional[str] = None      # None=auto (transformers | "off")
+    asr_local_backend: str = "faster-whisper"     # faster-whisper | transformers | off
+    asr_local_model: str = "tiny"                 # whisper-tiny (local fast default)
+    tts_local_engine: str = "auto"                # auto | edge | sapi5 | indic-parler (on demand)
 
     groq_api_key: Optional[str] = None
     groq_model: str = "llama-3.3-70b-versatile"
@@ -66,6 +76,7 @@ class Settings:
     screen_vision_enabled: bool = True
     vision_enabled: bool = True
     vision_provider: str = "gemini"
+    allow_remote_vision: bool = False            # explicit opt-in for Gemini screenshots under LOCAL_ONLY
     vision_capture_mode: str = "active_window"  # active_window | full_screen
     vision_save_screenshots: bool = False
     vision_screenshots_dir: Optional[str] = None
@@ -156,9 +167,17 @@ class Settings:
             openrouter_model=os.getenv("OPENROUTER_MODEL", "openrouter/free"),
             openrouter_base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
             slm_enabled=os.getenv("SLM_ENABLED", "true").lower() == "true",
-            slm_model=os.getenv("SLM_MODEL", "qwen3-1.7b"),
+            slm_model=os.getenv("SLM_MODEL", "qwen3-0.6b"),
             slm_mode=os.getenv("SLM_MODE", "non_thinking"),
             slm_max_tokens=int(os.getenv("SLM_MAX_TOKENS", "128")),
+            local_only=os.getenv("LOCAL_ONLY", "true").lower() == "true",
+            allow_remote_llm=os.getenv("ALLOW_REMOTE_LLM", "false").lower() == "true",
+            model_dir=os.getenv("MODEL_DIR"),
+            model_unload_idle_seconds=float(os.getenv("MODEL_UNLOAD_IDLE_SECONDS", "300.0")),
+            slm_neural_backend=os.getenv("SLM_NEURAL_BACKEND"),
+            asr_local_backend=os.getenv("ASR_LOCAL_BACKEND", "faster-whisper").lower(),
+            asr_local_model=os.getenv("ASR_LOCAL_MODEL", "tiny").lower(),
+            tts_local_engine=os.getenv("TTS_LOCAL_ENGINE", "auto").lower(),
             groq_api_key=os.getenv("GROQ_API_KEY"),
             groq_model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
             groq_stt_model=os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo"),
@@ -167,6 +186,7 @@ class Settings:
             screen_vision_enabled=v_enabled,
             vision_enabled=v_enabled,
             vision_provider=os.getenv("VISION_PROVIDER", "gemini").lower(),
+            allow_remote_vision=os.getenv("ALLOW_REMOTE_VISION", "false").lower() == "true",
             vision_capture_mode=os.getenv("VISION_CAPTURE_MODE", "active_window").lower(),
             vision_save_screenshots=os.getenv("VISION_SAVE_SCREENSHOTS", "false").lower() == "true",
             vision_screenshots_dir=os.getenv("VISION_SCREENSHOTS_DIR"),
