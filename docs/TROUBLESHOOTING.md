@@ -117,18 +117,30 @@ to `_VOCAB_FIXES` in `voice/stt.py`.
 ### Real owner gets UNKNOWN
 
 1. Do not lower thresholds.
-2. Re-enroll with clean samples:
+2. Run the read-only live diagnostic:
+   ```powershell
+   .\venv\Scripts\python.exe main.py --speaker-test
+   ```
+   It prints the MFCC score, ECAPA score, and each threshold separately.
+3. Re-enroll with clean samples:
    ```powershell
    .\venv\Scripts\python.exe enroll_owner.py --re-enroll
    ```
-3. Test:
+4. Test:
    ```powershell
    .\venv\Scripts\python.exe enroll_owner.py --test-verification
    ```
-4. Check the ECAPA profile exists:
+5. Check the ECAPA profile exists:
    ```powershell
    Get-ChildItem data\speaker_profiles
    ```
+
+If the ECAPA score is high but the result is still `UNKNOWN`, check that the
+profile was built after the latest enrollment (the loader prints
+`ECAPA profile loaded ... threshold=0.xx`). If the score itself is low, the
+microphone captured mostly silence/noise: re-enroll in a quiet room and stay
+close to the mic. ECAPA and MFCC use separate thresholds; the 0.78 MFCC value
+must never be applied to ECAPA scores.
 
 ### `ECAPA model unavailable ... FAIL CLOSED`
 

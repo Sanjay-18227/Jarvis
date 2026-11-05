@@ -45,6 +45,76 @@ class EcapaEmbeddingEngine:
             return False
 
     @staticmethod
+    def _trim_speech(audio: np.ndarray, sr: int = 16000,
+                     max_seconds: float = 8.0) -> Optional[np.ndarray]:
+        """
+        Remove leading/trailing silence and keep the strongest natural speech
+        cluster. Long idle/noise recordings otherwise dominate the ECAPA mean
+        embedding and collapse the owner score.
+
+        This is deliberately conservative: pauses up to 0.6 s are kept inside a
+        cluster, and up to 8 s of actual speech is retained.
+        """
+        if audio is None or len(audio) < int(sr * 0.3):
+            return audio
+
+        frame_len = max(int(sr * 0.025), 128)
+        hop = max(int(sr * 0.010), 64)
+        if len(audio) < frame_len:
+            return audio
+
+        n_frames = 1 + (len(audio) - frame_len) // hop
+        idx = np.arange(frame_len)[None, :] + hop * np.arange(n_frames)[:, None]
+        frames = audio[idx]
+        rms = np.sqrt(np.mean(np.square(frames, dtype=np.float32), axis=1))
+        peak = float(np.max(rms)) if len(rms) else 0.0
+        if peak <= 1e-6:
+            return None
+
+        # Robust noise estimate; a single click must not define the floor.
+        noise = float(np.percentile(rms, 20))
+        threshold = max(noise * 2.5, peak * 0.035, 1e-4)
+        active_idx = np.flatnonzero(rms >= threshold)
+        if len(active_idx) == 0:
+            return audio if len(audio) <= int(max_seconds * sr) else None
+
+        # Group active frames into natural speech clusters, bridging short pauses.
+        gap_frames = max(1, int(0.6 * sr / hop))
+        clusters = []
+        start = prev = int(active_idx[0])
+        score = 0.0
+        for i in active_idx:
+            i = int(i)
+            if i - prev > gap_frames:
+                clusters.append((start, prev, score))
+                start = i
+                score = 0.0
+            score += float(rms[i])
+            prev = i
+        clusters.append((start, prev, score))
+
+        # Keep the cluster with the most speech energy (longest wins on ties).
+        s, e, _ = max(clusters, key=lambda c: (c[2], c[1] - c[0]))
+        start_sample = max(0, s * hop - int(0.20 * sr))
+        end_sample = min(len(audio),
+                         e * hop + frame_len + int(0.20 * sr))
+        segment = audio[start_sample:end_sample]
+
+        max_samples = int(max_seconds * sr)
+        if len(segment) > max_samples:
+            # Take the highest-energy window inside the selected speech cluster.
+            win = max_samples
+            csum = np.concatenate(
+                [[0.0], np.cumsum(np.square(segment.astype(np.float64)))])
+            starts = np.arange(0, len(segment) - win + 1,
+                               max(1, int(0.10 * sr)))
+            energies = csum[starts + win] - csum[starts]
+            best = int(starts[int(np.argmax(energies))])
+            segment = segment[best:best + win]
+
+        return segment.astype("float32")
+
+    @staticmethod
     def _decode_wav(audio_data: bytes) -> Optional[np.ndarray]:
         try:
             import scipy.signal as signal
@@ -73,6 +143,13 @@ class EcapaEmbeddingEngine:
                 from math import gcd
                 g = gcd(int(sr), 16000)
                 audio = signal.resample_poly(audio, 16000 // g, int(sr) // g)
+            # Drop idle/silence padding before computing the utterance embedding.
+            # Without this, a 30-60 s VAD turn is dominated by background audio
+            # and a genuine owner can score like an impostor.
+            audio = EcapaEmbeddingEngine._trim_speech(audio, 16000)
+            if audio is None or len(audio) == 0:
+                return None
+
             # normalize amplitude
             peak = float(np.max(np.abs(audio))) if len(audio) else 0.0
             if peak <= 1e-6:

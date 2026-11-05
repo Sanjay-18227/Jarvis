@@ -44,6 +44,10 @@ def main():
         from scripts.mic_test import run_mic_test
         sys.exit(run_mic_test())
 
+    if "--speaker-test" in sys.argv:
+        from scripts.speaker_test import run_speaker_test
+        sys.exit(run_speaker_test())
+
     if "--set-pin" in sys.argv:
         from security.recovery import _interactive_set_pin
         _interactive_set_pin()

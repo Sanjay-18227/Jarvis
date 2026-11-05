@@ -599,6 +599,19 @@ class JarvisAgent:
         """Continuous voice loop."""
         self._running = True
         self.voice_engine.start()
+
+        # Fix the microphone threshold to the actual room before listening.
+        # Without this the default 400 RMS floor triggers on fans/keyboard noise
+        # and produces 30-60 s recordings dominated by silence (which destroys
+        # ECAPA speaker verification).
+        try:
+            if getattr(self.settings, "dynamic_energy_threshold", True):
+                print("[VOICE] Calibrating ambient noise (please stay quiet)...")
+                self.recorder.calibrate_ambient_noise(
+                    duration=getattr(self.settings, "vad_noise_calibration_seconds", 0.5))
+        except Exception as e:
+            print(f"[VOICE] Ambient calibration skipped: {e}")
+
         print(f"\n[JARVIS] Voice mode active. Provider: {self.provider.name}")
         title = self.preferences.get("preferred_title", "Sir")
         greeting = f"JARVIS online and fully operational. At your service, {title}."

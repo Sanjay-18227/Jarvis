@@ -74,6 +74,14 @@ class SpeakerVerifier:
         self._ecapa = get_ecapa_engine()
         self.ecapa_centroid: Optional[np.ndarray] = None
         self.ecapa_representatives: List[np.ndarray] = []
+        # ECAPA cosine similarities live on a different scale than the legacy
+        # MFCC profile. Calibrate this threshold at enrollment; never reuse the
+        # 0.78 MFCC threshold (that would reject the real owner).
+        self.ecapa_threshold = max(0.60, float(
+            getattr(settings, "owner_ecapa_threshold", 0.62)))
+        self.ecapa_uncertain_threshold = max(0.45, min(
+            self.ecapa_threshold - 0.05,
+            float(getattr(settings, "uncertain_ecapa_threshold", 0.52))))
         self.load_profile()
         self.load_ecapa_profile()
         self._last_embedding_space = "mfcc"
@@ -184,6 +192,30 @@ class SpeakerVerifier:
         base_dir = get_settings().base_dir
         return os.path.join(base_dir, "data", "speaker_profiles", "owner_profile_ecapa.json")
 
+    @staticmethod
+    def calibrate_ecapa_threshold(
+        intra_scores: List[float],
+        floor: float = 0.62,
+        cap: float = 0.82,
+    ) -> float:
+        """
+        Derive a conservative ECAPA threshold from same-owner self-scores.
+
+        - Drops near-orthogonal outliers (bad/partial recordings).
+        - Never goes below `floor`, so calibration can never weaken security.
+        - Never exceeds `cap`, so a lucky enrollment cannot lock the owner out.
+        """
+        vals = [float(x) for x in (intra_scores or [])
+                if np.isfinite(float(x)) and float(x) > 0.0]
+        if not vals:
+            return round(float(floor), 3)
+        median = float(np.median(vals))
+        inliers = [x for x in vals if x >= max(0.40, median - 0.25)]
+        if len(inliers) < 2:
+            return round(float(floor), 3)
+        proposed = min(inliers) - 0.06
+        return round(max(float(floor), min(float(cap), proposed)), 3)
+
     def load_ecapa_profile(self) -> bool:
         try:
             if not os.path.exists(self._ecapa_path):
@@ -198,16 +230,40 @@ class SpeakerVerifier:
                 return False
             self.ecapa_centroid = cent
             self.ecapa_representatives = [r for r in reps if r.size == 192]
-            print(f"[SPEAKER] ECAPA profile loaded (model=ecapa, dim=192, reps={len(self.ecapa_representatives)})")
+
+            saved_threshold = data.get("calibrated_threshold")
+            try:
+                saved_threshold = float(saved_threshold)
+            except (TypeError, ValueError):
+                saved_threshold = None
+            if saved_threshold is not None and 0.45 <= saved_threshold <= 0.90:
+                # An existing calibrated threshold is never lowered.
+                self.ecapa_threshold = max(self.ecapa_threshold, saved_threshold)
+            else:
+                migrated = self.calibrate_ecapa_threshold(
+                    data.get("intra_similarities", []))
+                self.ecapa_threshold = max(self.ecapa_threshold, migrated)
+            self.ecapa_uncertain_threshold = max(0.45, min(
+                self.ecapa_uncertain_threshold, self.ecapa_threshold - 0.05))
+
+            print(f"[SPEAKER] ECAPA profile loaded (model=ecapa, dim=192, "
+                  f"reps={len(self.ecapa_representatives)}, "
+                  f"threshold={self.ecapa_threshold:.2f})")
             return True
         except Exception as e:
             log.error("[SPEAKER] ECAPA profile load failed: %s", e)
             return False
 
     def save_ecapa_profile(self, centroid: np.ndarray, representatives: List[np.ndarray],
-                           sample_count: int = 1, intra_similarities: Optional[List[float]] = None) -> bool:
+                           sample_count: int = 1,
+                           intra_similarities: Optional[List[float]] = None,
+                           calibrated_threshold: Optional[float] = None) -> bool:
         """Atomically writes the ECAPA biometric profile (biometric vectors stay local)."""
         import time, tempfile
+        if calibrated_threshold is not None:
+            # Calibration may tighten security, never weaken the configured floor.
+            self.ecapa_threshold = max(self.ecapa_threshold, 0.60,
+                                       float(calibrated_threshold))
         data = {
             "owner_name": self.owner_name or "Sanjay",
             "model": "speechbrain/spkrec-ecapa-voxceleb",
@@ -216,6 +272,7 @@ class SpeakerVerifier:
             "representatives": [r.tolist() for r in representatives],
             "sample_count": sample_count,
             "intra_similarities": intra_similarities or [],
+            "calibrated_threshold": self.ecapa_threshold,
             "updated_at": time.time(),
         }
         try:
@@ -397,7 +454,8 @@ class SpeakerVerifier:
           authenticated-session continuity for low-risk actions. High-risk actions always require fresh high confidence.
         """
         print("[SPEAKER] Verification started")
-        if self.owner_embedding is None or len(self.owner_embedding) == 0:
+        if ((self.owner_embedding is None or len(self.owner_embedding) == 0)
+                and self.ecapa_centroid is None):
             print("[SPEAKER] Similarity=0.00")
             print(f"[SPEAKER] Threshold={self.similarity_threshold_owner:.2f}")
             print("[SPEAKER] Result=UNKNOWN")
@@ -413,15 +471,22 @@ class SpeakerVerifier:
 
             embedding_space = getattr(self, "_last_embedding_space", "mfcc")
             if embedding_space == "ecapa":
+                if self.ecapa_centroid is None:
+                    print("[SPEAKER] ECAPA profile missing -> UNKNOWN")
+                    return SpeakerClassification.UNKNOWN, 0.0
                 # ECAPA (PyTorch) biometric model space: dot product on normalized vectors
                 sims = [float(np.dot(self.ecapa_centroid, sample_embedding))]
                 for rep in self.ecapa_representatives:
                     sims.append(float(np.dot(rep, sample_embedding)))
                 best = max(sims)
                 confidence = max(0.0, min(1.0, best))
-                borderline_lower = getattr(self, "similarity_threshold_uncertain", 0.65)
-                print(f"[SPEAKER] ECAPA Similarity={best:.3f} Threshold={self.similarity_threshold_owner:.2f}")
-                if confidence >= self.similarity_threshold_owner:
+                ecapa_threshold = float(getattr(
+                    self, "ecapa_threshold", 0.62))
+                borderline_lower = float(getattr(
+                    self, "ecapa_uncertain_threshold", 0.52))
+                print(f"[SPEAKER] ECAPA Similarity={best:.3f} "
+                      f"Threshold={ecapa_threshold:.2f}")
+                if confidence >= ecapa_threshold:
                     return SpeakerClassification.OWNER, confidence
                 if confidence >= borderline_lower:
                     print("[SPEAKER] Result=UNCERTAIN (borderline; needs secondary verification)")

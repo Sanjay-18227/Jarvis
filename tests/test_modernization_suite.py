@@ -307,6 +307,60 @@ def test_custom_profile_ecapa_stays_isolated(tmp_path):
     assert "data" not in verifier._ecapa_path
 
 
+def test_ecapa_trim_removes_silence_padding():
+    """30-60 s VAD recordings must not dilute the ECAPA embedding with silence."""
+    import numpy as np
+    from voice.ecapa_engine import EcapaEmbeddingEngine
+
+    sr = 16000
+    t = np.arange(int(sr * 3), dtype=np.float32) / sr
+    speech = (0.2 * np.sin(2 * np.pi * 180 * t)).astype(np.float32)
+    padded = np.concatenate([
+        np.zeros(sr * 20, dtype=np.float32),
+        speech,
+        np.zeros(sr * 20, dtype=np.float32),
+    ])
+    trimmed = EcapaEmbeddingEngine._trim_speech(padded, sr, max_seconds=6.0)
+    assert trimmed is not None
+    assert len(trimmed) <= int(sr * 6.1)
+    assert len(trimmed) >= int(sr * 2.0), "speech must survive trimming"
+
+
+def test_ecapa_threshold_calibration_has_security_floor():
+    """ECAPA threshold is calibrated per space and never drops below 0.60."""
+    from voice.speaker_verification import SpeakerVerifier
+
+    assert SpeakerVerifier.calibrate_ecapa_threshold([]) >= 0.60
+    scores = [0.199, 0.655, 0.710, 0.712, 0.787, 0.806, 0.833, 0.841, 0.860]
+    calibrated = SpeakerVerifier.calibrate_ecapa_threshold(scores)
+    assert 0.60 <= calibrated <= 0.82
+    assert SpeakerVerifier.calibrate_ecapa_threshold([0.95, 0.97]) <= 0.82
+
+
+def test_ecapa_only_profile_can_verify():
+    """An ECAPA profile must work even if the legacy MFCC profile is absent."""
+    import numpy as np
+    from voice.speaker_verification import SpeakerVerifier
+    from config.constants import SpeakerClassification
+
+    verifier = SpeakerVerifier.__new__(SpeakerVerifier)
+    centroid = np.ones(192, dtype="float32") / np.sqrt(192)
+    verifier.owner_embedding = None
+    verifier.representative_embeddings = []
+    verifier.ecapa_centroid = centroid
+    verifier.ecapa_representatives = []
+    verifier.ecapa_threshold = 0.62
+    verifier.ecapa_uncertain_threshold = 0.52
+    verifier.similarity_threshold_owner = 0.78
+    verifier.similarity_threshold_uncertain = 0.70
+    verifier._last_embedding_space = "ecapa"
+    verifier.extract_embedding = lambda audio_data: centroid
+
+    result, confidence = verifier.verify_speaker(b"RIFF-fake-audio")
+    assert result == SpeakerClassification.OWNER
+    assert confidence > 0.99
+
+
 # ---------------------------------------------------------------- integration
 def test_skills_include_memory_and_scheduler():
     from skills.registry import get_skill_registry

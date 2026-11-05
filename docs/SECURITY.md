@@ -32,6 +32,12 @@ policy before sending a screenshot.
 | `BORDERLINE` | Score between uncertain and owner thresholds | Limited; high-risk actions require fresh owner confirmation |
 | `UNKNOWN` | Score below uncertain threshold, missing profile, or failed verification | **Zero computer control** |
 
+ECAPA and legacy MFCC scores are different scales. ECAPA uses its own
+calibrated threshold (floor `0.60`, default `0.62`), while MFCC uses
+`OWNER_SIMILARITY_THRESHOLD` (default `0.78`). Enrollment may tighten either
+threshold, never lower it. Applying the MFCC value to ECAPA would reject the
+real owner and is covered by regression tests.
+
 A failed verification invalidates any previous owner session. The owner session
 has a short TTL (30 s) and is re-checked for privileged actions.
 

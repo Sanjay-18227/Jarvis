@@ -27,7 +27,10 @@ powershell -ExecutionPolicy Bypass -File setup_jarvis.ps1
 # 4. Enroll the owner voice (real microphone)
 .\venv\Scripts\python.exe enroll_owner.py --re-enroll
 
-# 5. Run
+# 5. Verify the live microphone against the owner profile (read-only)
+.\venv\Scripts\python.exe main.py --speaker-test
+
+# 6. Run
 .\run_jarvis.bat
 # or text-only mode:
 .\venv\Scripts\python.exe main.py --text

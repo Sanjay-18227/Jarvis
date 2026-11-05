@@ -469,7 +469,8 @@ class VoiceEnrollment:
     def _enroll_ecapa(self, audio_samples: List[bytes]) -> bool:
         """
         Builds ECAPA 192-d embeddings from the already captured samples.
-        Keeps previous profile if validation fails (fail-safe).
+        Removes bad/partial recordings, calibrates a separate ECAPA threshold,
+        backs up the previous profile, and keeps it on any validation failure.
         """
         verifier = self.verifier
         vecs = []
@@ -477,22 +478,64 @@ class VoiceEnrollment:
             v = verifier._ecapa.embedding(s)
             if v is not None:
                 vecs.append(v)
-        if len(vecs) < 2:
+        if len(vecs) < 4:
             print("[ENROLL] ECAPA: too few valid embeddings; keeping current profile")
             return False
-        cent = np.mean(vecs, axis=0)
-        norm = np.linalg.norm(cent)
-        if norm <= 0:
-            return False
-        cent = cent / norm
-        v = np.stack(vecs)
+
+        v = np.stack(vecs).astype("float32")
         v = v / np.maximum(np.linalg.norm(v, axis=1, keepdims=True), 1e-6)
+
+        # Iteratively drop near-orthogonal outliers (partial recordings, noise).
+        cent = np.mean(v, axis=0)
+        cent = cent / max(float(np.linalg.norm(cent)), 1e-6)
+        sims = v @ cent
+        median = float(np.median(sims))
+        keep = sims >= max(0.40, median - 0.25)
+        if int(np.sum(keep)) < 4:
+            print("[ENROLL] ECAPA: too many inconsistent samples; keeping current profile")
+            return False
+        v = v[keep]
+        cent = np.mean(v, axis=0)
+        cent = cent / max(float(np.linalg.norm(cent)), 1e-6)
         intra = [float(np.dot(cent, x)) for x in v]
-        # representatives = samples close to centroid (>=92% of mean intra similarity)
-        reps = [vec for vec, s in zip(v, intra) if s >= float(np.mean(intra)) * 0.92][:8]
-        ok = verifier.save_ecapa_profile(cent, reps, sample_count=len(vecs), intra_similarities=intra)
+
+        threshold = verifier.calibrate_ecapa_threshold(intra)
+        # Every retained enrollment sample must pass with a small margin.
+        if min(intra) < threshold + 0.02:
+            threshold = max(0.60, min(intra) - 0.04)
+        # Re-enrollment may tighten the threshold, never lower it.
+        threshold = max(float(getattr(verifier, "ecapa_threshold", 0.62)),
+                        float(threshold))
+        threshold = min(threshold, 0.82)
+
+        ranked = sorted(zip(v, intra), key=lambda item: item[1], reverse=True)
+        reps = [vec for vec, score in ranked
+                if score >= max(threshold + 0.02, float(np.mean(intra)) * 0.90)][:8]
+        if not reps:
+            reps = [vec for vec, _ in ranked[:min(8, len(ranked))]]
+
+        # Preserve the previous ECAPA profile before atomic replacement.
+        ecapa_path = verifier._ecapa_path
+        if os.path.exists(ecapa_path):
+            try:
+                backup_dir = os.path.join(os.path.dirname(ecapa_path), "backups")
+                os.makedirs(backup_dir, exist_ok=True)
+                backup = os.path.join(
+                    backup_dir,
+                    f"owner_profile_ecapa_backup_{time.strftime('%Y%m%d_%H%M%S')}.json")
+                shutil.copy2(ecapa_path, backup)
+                print(f"[ENROLL] Previous ECAPA profile backed up to: {backup}")
+            except Exception as e:
+                print(f"[ENROLL] ECAPA backup failed (continuing): {e}")
+
+        ok = verifier.save_ecapa_profile(
+            cent, reps, sample_count=len(v), intra_similarities=intra,
+            calibrated_threshold=threshold)
         if ok:
-            print(f"[ENROLL] ECAPA profile saved (samples={len(vecs)}, dim=192)")
+            print(f"[ENROLL] ECAPA profile saved (samples={len(v)}, dim=192)")
+            print(f"[ENROLL] ECAPA self-check: min={min(intra):.2f} "
+                  f"mean={float(np.mean(intra)):.2f} threshold={threshold:.2f} "
+                  f"outliers_removed={len(vecs) - len(v)}")
         return ok
 
     def run_interactive_enrollment(

@@ -50,8 +50,15 @@ Nothing is uploaded. Raw temporary audio is deleted unless
 - Inconsistent outliers are filtered by pairwise cosine similarity.
 - The MFCC profile is saved first, then the ECAPA profile is built from the
   same samples.
-- The previous profile is backed up before replacement; if enrollment fails,
-  the backup is restored.
+- ECAPA embeddings trim leading/trailing silence and keep the strongest natural
+  speech cluster, so idle room noise cannot dilute the voiceprint.
+- Near-orthogonal ECAPA outliers (partial or noisy recordings) are removed
+  before the centroid is computed.
+- ECAPA uses its **own calibrated threshold** derived from same-owner scores;
+  the 0.78 MFCC threshold is never applied to the ECAPA scale. The ECAPA floor
+  is 0.60 and re-enrollment can only tighten it, never lower it.
+- The previous `.dat` and ECAPA profiles are backed up before replacement; if
+  enrollment fails, the old profiles are preserved.
 
 Other entry points:
 
@@ -75,6 +82,13 @@ Other entry points:
 
 Expected output: `[SECURITY] Owner session authenticated`.
 
+For a read-only live check that prints both MFCC and ECAPA scores without
+changing the profile:
+
+```powershell
+.\venv\Scripts\python.exe main.py --speaker-test
+```
+
 Then start JARVIS and speak a command:
 
 ```powershell
@@ -82,7 +96,8 @@ Then start JARVIS and speak a command:
 ```
 
 If verification returns `UNKNOWN` for the real owner, do **not** lower the
-threshold. Re-enroll with cleaner samples, or use the recovery PIN.
+threshold. Re-run `--speaker-test`, move closer to the microphone, and re-enroll
+with cleaner samples, or use the recovery PIN.
 
 ---
 
@@ -99,6 +114,13 @@ Rules that are enforced in code:
 - Thresholds are **never lowered automatically**. Calibration only proposes a
   threshold within the allowed band; the owner can raise it in `.env`
   (`OWNER_SIMILARITY_THRESHOLD`, `UNCERTAIN_SIMILARITY_THRESHOLD`).
+- ECAPA and MFCC are separate similarity scales. ECAPA uses
+  `OWNER_ECAPA_THRESHOLD` (floor 0.60, calibrated at enrollment), while MFCC
+  uses `OWNER_SIMILARITY_THRESHOLD`. Applying the MFCC threshold to ECAPA is a
+  bug and is guarded by tests.
+- Live voice mode calibrates the ambient microphone threshold at startup.
+  Otherwise fan/keyboard noise can create 30–60 s turns dominated by silence,
+  which collapses ECAPA owner scores.
 - If an ECAPA profile exists but the ECAPA model cannot load (missing files or
   < 250 MB free RAM), verification **fails closed**. It does not silently fall
   back to the weaker MFCC space.
@@ -111,8 +133,10 @@ Rules that are enforced in code:
 ## 6. Re-enrollment and rollback
 
 - Every enrollment backs up the previous `.dat` profile under
-  `data/speaker_profiles/backups/`.
-- A failed enrollment restores the backup automatically.
+  `data/speaker_profiles/backups/` and the previous ECAPA profile as
+  `owner_profile_ecapa_backup_*.json`.
+- A failed enrollment restores/preserves the previous `.dat` and keeps the old
+  ECAPA profile.
 - To re-enroll, run `enroll_owner.py --re-enroll`; no need to delete files.
 - Keep backups private; they are biometric data.
 - To deliberately remove biometrics, delete both profile files and re-enroll.

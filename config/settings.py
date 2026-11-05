@@ -110,6 +110,10 @@ class Settings:
     # Speaker Verification & Biometrics (Part C & E)
     owner_similarity_threshold: float = 0.78
     uncertain_similarity_threshold: float = 0.70
+    # ECAPA cosine scores use a different scale than legacy MFCC. This value is
+    # calibrated at enrollment and never allowed below 0.60.
+    owner_ecapa_threshold: float = 0.62
+    uncertain_ecapa_threshold: float = 0.52
 
     # Browser Configuration (Default: Microsoft Edge)
     default_browser: str = "edge"
@@ -212,6 +216,8 @@ class Settings:
             vad_noise_calibration_seconds=float(os.getenv("VAD_NOISE_CALIBRATION_SECONDS", "0.5")),
             owner_similarity_threshold=float(os.getenv("OWNER_SIMILARITY_THRESHOLD", "0.78")),
             uncertain_similarity_threshold=float(os.getenv("UNCERTAIN_SIMILARITY_THRESHOLD", "0.70")),
+            owner_ecapa_threshold=float(os.getenv("OWNER_ECAPA_THRESHOLD", "0.62")),
+            uncertain_ecapa_threshold=float(os.getenv("UNCERTAIN_ECAPA_THRESHOLD", "0.52")),
             default_browser=os.getenv("DEFAULT_BROWSER", "edge").lower(),
             barge_in_enabled=os.getenv("BARGE_IN_ENABLED", "true").lower() == "true",
             barge_in_cooldown_seconds=float(os.getenv("BARGE_IN_COOLDOWN_SECONDS", "0.25")),

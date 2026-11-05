@@ -1,6 +1,6 @@
 # Test Results and Verification Evidence
 
-**Date:** 2026-11-04
+**Date:** 2026-11-04 · ECAPA biometric fix rerun 2026-11-05
 **Machine:** Acer laptop · AMD Ryzen 3 7320U (4C/8T) · 7.3 GB usable RAM ·
 Windows 11 Home 64-bit · AMD Radeon integrated (no CUDA) · ~68 GB free disk
 **Project Python:** `venv\Scripts\python.exe` · Python 3.13.14
@@ -21,10 +21,10 @@ environment, not mocks, unless explicitly labeled.
 ```
 
 ```
-167 passed, 2 warnings in 189.21s (0:03:09)
+170 passed, 2 warnings in 177.42s (0:02:57)
 ```
 
-**Status: PASS — 167 passed, 0 failed.**
+**Status: PASS — 170 passed, 0 failed.**
 
 The two warnings are upstream deprecations:
 
@@ -40,7 +40,7 @@ Neither affects functionality.
 ```
 
 ```
-22 passed in 17.20s
+25 passed in 16.46s
 ```
 
 Covers: hardware contract + RAM policy, ECAPA never disabled under normal RAM,
@@ -48,7 +48,8 @@ registry integrity and explicit loaders, ASR vocabulary, SQLite memory
 roundtrip/privacy/forget/clear, job store recurrence/retry/cancel, scheduler
 dispatch/refusal/owner-approval skip, recovery PIN hash/lockout/weak-PIN
 rejection, LOCAL_ONLY cloud-reasoning block, LOCAL_ONLY voice-transport block,
-isolated custom ECAPA profiles, skill registration, fail-closed ECAPA.
+isolated custom ECAPA profiles, skill registration, fail-closed ECAPA, ECAPA
+silence trimming, ECAPA threshold floor/calibration, and ECAPA-only verification.
 
 ### Phase 4 vision suite
 
@@ -86,7 +87,7 @@ the owner must enroll with the real voice.
 ```
 
 ```
-summary: 0 FAIL, 5 WARN
+summary: 0 FAIL, 4 WARN
 JARVIS environment is healthy.
 ```
 
@@ -95,7 +96,8 @@ JARVIS environment is healthy.
 - Models: silero-vad, whisper-tiny, whisper-base, ECAPA, Qwen3-0.6B: downloaded
 - Optional models: SmolVLM, e5-small, indic-parler: disabled by registry policy
 - WARN: API keys present while `LOCAL_ONLY=true` (expected; they are not used)
-- Audio: 12 input devices detected
+- WARN: SLM not preloaded because free RAM was 1969 MB (policy gate 2200 MB)
+- Audio: 15 input devices detected
 
 `doctor.py` exits with code 1 by design when warnings are present; the summary
 is `0 FAIL`.
@@ -146,6 +148,31 @@ real microphone recording. Whisper-tiny remains the default for latency.
 | L2 norm | 1.0 |
 | Status | PASS |
 
+#### ECAPA live-capture regression (2026-11-05)
+
+Symptom: enrollment self-scores were 0.79–0.98, but live ECAPA scores were
+0.12–0.40, so the real owner was rejected as `UNKNOWN`.
+
+Controlled same-speaker audio (Windows SAPI, same voice/microphone):
+
+| Input | ECAPA cosine |
+|---|---|
+| Clean 2–4 s clips | 0.77–0.85 |
+| Same clip with 20 s of padding added on each side | **0.31** |
+| Same 43 s padded recording after `_trim_speech` | **0.809** |
+
+Root cause: live VAD turns of 30–60 s were dominated by leading/trailing
+silence and room noise, and ECAPA mean-pools the whole input. Live mode also
+never calibrated the ambient threshold, so it ran with
+`noise_floor_rms=120` / `threshold_rms=400` and triggered on fan/keyboard noise.
+
+Fixes: silence trimming before embedding, startup ambient-noise calibration,
+a separate ECAPA threshold scale (floor 0.60, default 0.62; legacy MFCC stays
+0.79), ECAPA outlier filtering during enrollment, and the read-only
+`main.py --speaker-test` diagnostic.
+
+**Status: PASS (controlled audio). Real-microphone acceptance is MANUAL.**
+
 ### Local SLM (Qwen3-0.6B, fp32 CPU)
 
 | Metric | Measured |
@@ -193,7 +220,7 @@ Functional inference was verified earlier with the real model and prompt.
 | Vision Gemini-mocked flow | 11 Phase 4 tests | PASS |
 | LOCAL_ONLY blocks cloud reasoning | provider factory code + doctor WARN | PASS |
 | LOCAL_ONLY blocks cloud voice transport | `voice/voice_engine.py` + unit test | PASS |
-| Full test suite | pytest | PASS (167/167) |
+| Full test suite | pytest | PASS (170/170) |
 
 ---
 
@@ -227,6 +254,14 @@ Functional inference was verified earlier with the real model and prompt.
     restore beside themselves, never touching production biometric backups.
 13. **LOCAL_ONLY voice transport** — LiveKit (cloud relay) is disabled under
     `LOCAL_ONLY=true`; the local microphone path is used instead.
+14. **ECAPA silence dilution** — leading/trailing silence is trimmed and the
+    strongest natural speech cluster is kept before embedding. A same-speaker
+    43 s padded recording went from 0.31 to 0.809.
+15. **ECAPA threshold scale** — ECAPA now uses its own calibrated threshold
+    (floor 0.60, default 0.62), migrated on load and never lowered; the legacy
+    MFCC threshold stays at 0.79. ECAPA-only profiles verify even if the legacy
+    `.dat` is absent. Live voice mode calibrates ambient noise at startup, and
+    `main.py --speaker-test` reports both scores read-only.
 
 ---
 
@@ -234,14 +269,14 @@ Functional inference was verified earlier with the real model and prompt.
 
 | Requirement area | Status | Evidence |
 |---|---|---|
-| Audit + preserve existing features | PASS | `docs/CURRENT_ARCHITECTURE_AUDIT.md`; 167 tests |
+| Audit + preserve existing features | PASS | `docs/CURRENT_ARCHITECTURE_AUDIT.md`; 170 tests |
 | Voice security repairs | PASS | ECAPA tests, fail-closed test, PIN tests |
 | Model stack (HF + PyTorch) | PASS | registry, loaders, downloads, benchmarks |
 | Computer control | PASS | skills + agent loop tests |
 | Routing / SLM / agent loop | PASS | real Qwen3 inference, Phase 3 tests |
 | Vision | PASS (mock/structural) | Phase 4 11 tests; local VLM BLOCKED by RAM |
 | Memory + scheduling | PASS | SQLite tests + smoke |
-| Test suite | PASS | 167 passed, 0 failed |
+| Test suite | PASS | 170 passed, 0 failed |
 | Docs | PASS | this docs set |
 | Real owner voice enrollment | MANUAL | user must run enrollment |
 | Real Tamil/code-mixed ASR | MANUAL | needs real speech |
@@ -256,6 +291,7 @@ Functional inference was verified earlier with the real model and prompt.
 ## 7. Manual test checklist (owner)
 
 - [ ] Re-enroll with the real voice: `python enroll_owner.py --re-enroll`
+- [ ] Run the live diagnostic: `python main.py --speaker-test` (ECAPA ≥ 0.62)
 - [ ] Confirm `OWNER` on 3 different phrases
 - [ ] Second person → `UNKNOWN`, no computer control
 - [ ] Tamil / Tamil-English mixed command accuracy
