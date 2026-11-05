@@ -21,7 +21,7 @@ environment, not mocks, unless explicitly labeled.
 ```
 
 ```
-170 passed, 2 warnings in 177.42s (0:02:57)
+170 passed, 2 warnings in 169.08s (0:02:49)
 ```
 
 **Status: PASS — 170 passed, 0 failed.**
@@ -167,9 +167,9 @@ never calibrated the ambient threshold, so it ran with
 `noise_floor_rms=120` / `threshold_rms=400` and triggered on fan/keyboard noise.
 
 Fixes: silence trimming before embedding, startup ambient-noise calibration,
-a separate ECAPA threshold scale (floor 0.60, default 0.62; legacy MFCC stays
-0.79), ECAPA outlier filtering during enrollment, and the read-only
-`main.py --speaker-test` diagnostic.
+a separate ECAPA threshold scale (floor 0.60, default 0.62, calibration cap
+0.72; legacy MFCC stays 0.79), ECAPA outlier filtering during enrollment, and
+the read-only `main.py --speaker-test` diagnostic.
 
 **Status: PASS (controlled audio). Real-microphone acceptance is MANUAL.**
 
@@ -258,8 +258,8 @@ Functional inference was verified earlier with the real model and prompt.
     strongest natural speech cluster is kept before embedding. A same-speaker
     43 s padded recording went from 0.31 to 0.809.
 15. **ECAPA threshold scale** — ECAPA now uses its own calibrated threshold
-    (floor 0.60, default 0.62), migrated on load and never lowered; the legacy
-    MFCC threshold stays at 0.79. ECAPA-only profiles verify even if the legacy
+    (floor 0.60, default 0.62, cap 0.72), migrated on load and never lowered;
+    the legacy MFCC threshold stays at 0.79. ECAPA-only profiles verify even if the legacy
     `.dat` is absent. Live voice mode calibrates ambient noise at startup, and
     `main.py --speaker-test` reports both scores read-only.
 

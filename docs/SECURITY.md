@@ -33,10 +33,12 @@ policy before sending a screenshot.
 | `UNKNOWN` | Score below uncertain threshold, missing profile, or failed verification | **Zero computer control** |
 
 ECAPA and legacy MFCC scores are different scales. ECAPA uses its own
-calibrated threshold (floor `0.60`, default `0.62`), while MFCC uses
-`OWNER_SIMILARITY_THRESHOLD` (default `0.78`). Enrollment may tighten either
-threshold, never lower it. Applying the MFCC value to ECAPA would reject the
-real owner and is covered by regression tests.
+calibrated threshold (floor `0.60`, default `0.62`, calibration cap `0.72`),
+while MFCC uses `OWNER_SIMILARITY_THRESHOLD` (default `0.78`). Enrollment may
+tighten either threshold, never lower it. The cap exists because enrollment
+self-scores are biased upward; applying the MFCC value (or an uncapped
+self-score) to ECAPA would reject the real owner and is covered by regression
+tests.
 
 A failed verification invalidates any previous owner session. The owner session
 has a short TTL (30 s) and is re-checked for privileged actions.

@@ -56,7 +56,9 @@ Nothing is uploaded. Raw temporary audio is deleted unless
   before the centroid is computed.
 - ECAPA uses its **own calibrated threshold** derived from same-owner scores;
   the 0.78 MFCC threshold is never applied to the ECAPA scale. The ECAPA floor
-  is 0.60 and re-enrollment can only tighten it, never lower it.
+  is 0.60 and re-enrollment can only tighten it, never lower it. Calibration is
+  capped at 0.72 because enrollment self-scores are optimistically biased;
+  genuine held-out owner speech typically scores 0.77–0.85.
 - The previous `.dat` and ECAPA profiles are backed up before replacement; if
   enrollment fails, the old profiles are preserved.
 

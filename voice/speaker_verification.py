@@ -196,14 +196,17 @@ class SpeakerVerifier:
     def calibrate_ecapa_threshold(
         intra_scores: List[float],
         floor: float = 0.62,
-        cap: float = 0.82,
+        cap: float = 0.72,
     ) -> float:
         """
         Derive a conservative ECAPA threshold from same-owner self-scores.
 
         - Drops near-orthogonal outliers (bad/partial recordings).
         - Never goes below `floor`, so calibration can never weaken security.
-        - Never exceeds `cap`, so a lucky enrollment cannot lock the owner out.
+        - Never exceeds `cap`: enrollment self-scores are optimistically biased
+          (the sample is part of the centroid), while genuine held-out owner
+          audio typically scores 0.77-0.85. A higher threshold would lock the
+          owner out on short or slightly noisy phrases.
         """
         vals = [float(x) for x in (intra_scores or [])
                 if np.isfinite(float(x)) and float(x) > 0.0]
@@ -213,7 +216,7 @@ class SpeakerVerifier:
         inliers = [x for x in vals if x >= max(0.40, median - 0.25)]
         if len(inliers) < 2:
             return round(float(floor), 3)
-        proposed = min(inliers) - 0.06
+        proposed = min(inliers) - 0.08
         return round(max(float(floor), min(float(cap), proposed)), 3)
 
     def load_ecapa_profile(self) -> bool:

@@ -333,8 +333,10 @@ def test_ecapa_threshold_calibration_has_security_floor():
     assert SpeakerVerifier.calibrate_ecapa_threshold([]) >= 0.60
     scores = [0.199, 0.655, 0.710, 0.712, 0.787, 0.806, 0.833, 0.841, 0.860]
     calibrated = SpeakerVerifier.calibrate_ecapa_threshold(scores)
-    assert 0.60 <= calibrated <= 0.82
-    assert SpeakerVerifier.calibrate_ecapa_threshold([0.95, 0.97]) <= 0.82
+    assert 0.60 <= calibrated <= 0.72
+    # Enrollment self-scores are biased high; never exceed the lockout cap.
+    assert SpeakerVerifier.calibrate_ecapa_threshold([0.95, 0.97]) <= 0.72
+    assert SpeakerVerifier.calibrate_ecapa_threshold([0.99] * 10) <= 0.72
 
 
 def test_ecapa_only_profile_can_verify():

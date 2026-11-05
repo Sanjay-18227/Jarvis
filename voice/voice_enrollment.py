@@ -506,7 +506,9 @@ class VoiceEnrollment:
         # Re-enrollment may tighten the threshold, never lower it.
         threshold = max(float(getattr(verifier, "ecapa_threshold", 0.62)),
                         float(threshold))
-        threshold = min(threshold, 0.82)
+        # Self-scores are optimistically biased; never make the gate so tight
+        # that normal held-out owner speech (0.77-0.85) is rejected.
+        threshold = min(threshold, 0.72)
 
         ranked = sorted(zip(v, intra), key=lambda item: item[1], reverse=True)
         reps = [vec for vec, score in ranked
